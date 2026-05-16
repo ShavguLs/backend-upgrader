@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Keep environment variables out of version control
+.env
+.env.*
+!.env.example
+
+# Build/test output
+/dist/
+/coverage/
+*.tsbuildinfo
+
+# Generated files
+/generated/
+
+# Logs
+*.log
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
