@@ -11,14 +11,104 @@ datasource db {
 }
 
 model User {
-  id          Int      @id @default(autoincrement())
-  email       String?  @unique
-  steamId     String   @unique
-  displayName String
-  avatar      String?
-  profileUrl  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                    Int                    @id @default(autoincrement())
+  email                 String?                @unique
+  steamId               String                 @unique
+  displayName           String
+  avatar                String?
+  profileUrl            String?
+  wallet                Wallet?
+  deposits              Deposit[]
+  inventoryItems        InventoryItem[]
+  inventoryTransactions InventoryTransaction[]
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+}
+
+model Wallet {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Decimal  @default(0) @db.Decimal(18, 2)
+  currency  String   @default("RUB")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Deposit {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderNumber     String    @unique
+  amountRub       Decimal   @db.Decimal(18, 2)
+  sourceCurrency  String    @default("RUB")
+  paymentCurrency String?
+  plisioTxnId     String?   @unique
+  invoiceUrl      String?
+  status          String    @default("created")
+  creditedAt      DateTime?
+  rawCallback     Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Skin {
+  id              Int             @id @default(autoincrement())
+  marketHashName  String          @unique
+  name            String
+  weapon          String?
+  category        String?
+  rarity          String?
+  exterior        String?
+  imageUrl        String?
+  priceRub        Decimal         @db.Decimal(18, 2)
+  provider        String?
+  providerItemId  String?
+  providerRawData Json?
+  lastSyncedAt    DateTime?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  inventoryItems  InventoryItem[]
+
+  @@index([isActive, priceRub])
+  @@index([weapon])
+  @@index([rarity])
+  @@index([exterior])
+}
+
+model InventoryItem {
+  id               Int                    @id @default(autoincrement())
+  userId           Int
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skinId           Int
+  skin             Skin                   @relation(fields: [skinId], references: [id])
+  purchasePriceRub Decimal                @db.Decimal(18, 2)
+  sellPriceRub     Decimal                @db.Decimal(18, 2)
+  status           String                 @default("owned")
+  source           String                 @default("purchase")
+  metadata         Json?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  transactions     InventoryTransaction[]
+
+  @@index([userId, status])
+  @@index([skinId])
+}
+
+model InventoryTransaction {
+  id              Int            @id @default(autoincrement())
+  userId          Int
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inventoryItemId Int?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+  type            String
+  amountRub       Decimal        @db.Decimal(18, 2)
+  metadata        Json?
+  createdAt       DateTime       @default(now())
+
+  @@index([userId, createdAt])
+  @@index([inventoryItemId])
 }
 
 model Session {

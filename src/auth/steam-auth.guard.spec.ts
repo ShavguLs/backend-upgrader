@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { ExecutionContext } from '@nestjs/common';
 import { SteamAuthGuard } from './steam-auth.guard';
 import type { Request } from 'express';

@@ -2,22 +2,40 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
 import { AuthenticatedGuard } from './authenticated.guard';
 import type { Request, Response } from 'express';
 
 describe('AuthController', () => {
   let controller: AuthController;
+  let authService: Pick<AuthService, 'getOrCreateDevUser'>;
+  const originalEnableDevLogin = process.env.ENABLE_DEV_LOGIN;
 
   beforeEach(async () => {
+    authService = {
+      getOrCreateDevUser: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
+      providers: [
+        {
+          provide: AuthService,
+          useValue: authService,
+        },
+      ],
     })
       .overrideGuard(AuthenticatedGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<AuthController>(AuthController);
+  });
+
+  afterEach(() => {
+    process.env.ENABLE_DEV_LOGIN = originalEnableDevLogin;
   });
 
   it('should be defined', () => {
@@ -49,6 +67,45 @@ describe('AuthController', () => {
     });
   });
 
+  describe('devLogin', () => {
+    it('should create a dev user and log in through the request', async () => {
+      process.env.ENABLE_DEV_LOGIN = 'true';
+      const user = {
+        id: 1,
+        email: null,
+        steamId: 'local-test-user',
+        displayName: 'Local Test User',
+        avatar: 'http://localhost/local-test-user-avatar.png',
+        profileUrl: 'http://localhost/local-test-user',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      jest.mocked(authService.getOrCreateDevUser).mockResolvedValue(user);
+      const req = {
+        login: jest.fn((loginUser, cb) => cb(null)),
+      } as unknown as Request;
+
+      const result = await controller.devLogin(req);
+
+      expect(authService.getOrCreateDevUser).toHaveBeenCalled();
+      expect(req.login).toHaveBeenCalledWith(user, expect.any(Function));
+      expect(result).toEqual({ user });
+    });
+
+    it('should reject dev login unless explicitly enabled', async () => {
+      delete process.env.ENABLE_DEV_LOGIN;
+      const req = {
+        login: jest.fn(),
+      } as unknown as Request;
+
+      await expect(controller.devLogin(req)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(authService.getOrCreateDevUser).not.toHaveBeenCalled();
+      expect(req.login).not.toHaveBeenCalled();
+    });
+  });
+
   describe('logout', () => {
     it('should call req.logout and req.session.destroy', async () => {
       const req = {
@@ -64,7 +121,6 @@ describe('AuthController', () => {
       const result = await controller.logout(req, res);
 
       expect(req.logout).toHaveBeenCalled();
-      // @ts-expect-error Mocking session for tests
       expect(req.session.destroy).toHaveBeenCalled();
       expect(res.clearCookie).toHaveBeenCalledWith('connect.sid');
       expect(result).toEqual({

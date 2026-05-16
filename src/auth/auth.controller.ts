@@ -6,14 +6,18 @@ import {
   Res,
   UseGuards,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthenticatedGuard } from './authenticated.guard';
 import { SteamAuthGuard } from './steam-auth.guard';
 import type { Request, Response } from 'express';
+import { AuthService } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
   @Get('steam')
   @UseGuards(AuthGuard('steam'))
   async steamAuth() {
@@ -35,6 +39,27 @@ export class AuthController {
     return req.user;
   }
 
+  @Post('dev-login')
+  async devLogin(@Req() req: Request) {
+    if (process.env.ENABLE_DEV_LOGIN !== 'true') {
+      throw new NotFoundException();
+    }
+
+    // Temporary local-only login for testing protected flows without Steam.
+    const user = await this.authService.getOrCreateDevUser();
+
+    return new Promise<{ user: typeof user }>((resolve, reject) => {
+      req.login(user, (err: Error | null) => {
+        if (err) {
+          reject(new InternalServerErrorException('Error logging in'));
+          return;
+        }
+
+        resolve({ user });
+      });
+    });
+  }
+
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return new Promise<{ message: string }>((resolve, reject) => {
@@ -45,7 +70,9 @@ export class AuthController {
         }
         req.session.destroy((err: Error | null) => {
           if (err) {
-            reject(new InternalServerErrorException('Error destroying session'));
+            reject(
+              new InternalServerErrorException('Error destroying session'),
+            );
             return;
           }
           res.clearCookie('connect.sid');
