@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { SkinsModule } from './skins/skins.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { InventoryModule } from './inventory/inventory.module';
     AuthModule,
     WalletModule,
     InventoryModule,
+    SkinsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
