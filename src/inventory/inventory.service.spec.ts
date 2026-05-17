@@ -1,13 +1,17 @@
 /* eslint-disable */
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FxRateService } from '../skins/fx-rate.service';
+import { WaxpeerWithdrawalProvider } from '../skins/providers/waxpeer-withdrawal.provider';
 import { InventoryService } from './inventory.service';
 
 describe('InventoryService', () => {
   let service: InventoryService;
   let prisma: PrismaService;
+  let waxpeerWithdrawal: jest.Mocked<WaxpeerWithdrawalProvider>;
+  let fxRateService: { getUsdToRubRate: jest.Mock };
 
   const activeSkin = {
     id: 1,
@@ -31,6 +35,9 @@ describe('InventoryService', () => {
         {
           provide: PrismaService,
           useValue: {
+            user: {
+              findUnique: jest.fn(),
+            },
             skin: {
               findMany: jest.fn(),
               findFirst: jest.fn(),
@@ -54,6 +61,11 @@ describe('InventoryService', () => {
             inventoryTransaction: {
               create: jest.fn(),
             },
+            withdrawalRequest: {
+              create: jest.fn(),
+              update: jest.fn(),
+              findUnique: jest.fn(),
+            },
             $transaction: jest.fn((arg) => {
               if (Array.isArray(arg)) {
                 return Promise.all(arg);
@@ -62,11 +74,31 @@ describe('InventoryService', () => {
             }),
           },
         },
+        {
+          provide: WaxpeerWithdrawalProvider,
+          useValue: {
+            isConfigured: jest.fn().mockReturnValue(true),
+            findCheapestListing: jest.fn(),
+            buyOneP2p: jest.fn(),
+            checkProjectIds: jest.fn(),
+            checkTradeLink: jest.fn(),
+          },
+        },
+        {
+          provide: FxRateService,
+          useValue: {
+            getUsdToRubRate: jest.fn().mockResolvedValue(90),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<InventoryService>(InventoryService);
     prisma = module.get<PrismaService>(PrismaService);
+    waxpeerWithdrawal = module.get(
+      WaxpeerWithdrawalProvider,
+    ) as unknown as jest.Mocked<WaxpeerWithdrawalProvider>;
+    fxRateService = module.get(FxRateService) as any;
   });
 
   it('should be defined', () => {
@@ -78,7 +110,7 @@ describe('InventoryService', () => {
     process.env.SKIN_SELLBACK_PERCENT = '101';
 
     try {
-      expect(() => new InventoryService(prisma)).toThrow(
+      expect(() => new InventoryService(prisma, waxpeerWithdrawal as any, fxRateService as any)).toThrow(
         'SKIN_SELLBACK_PERCENT must be between 0 and 100',
       );
     } finally {
@@ -95,7 +127,7 @@ describe('InventoryService', () => {
     process.env.SKIN_SELLBACK_PERCENT = '-1';
 
     try {
-      expect(() => new InventoryService(prisma)).toThrow(
+      expect(() => new InventoryService(prisma, waxpeerWithdrawal as any, fxRateService as any)).toThrow(
         'SKIN_SELLBACK_PERCENT must be between 0 and 100',
       );
     } finally {
@@ -458,6 +490,193 @@ describe('InventoryService', () => {
         }),
       });
       expect(result.item.status).toBe('sold');
+    });
+  });
+
+  describe('withdrawInventoryItem', () => {
+    const verifiedUser = {
+      id: 123,
+      steamTradeUrl:
+        'https://steamcommunity.com/tradeoffer/new/?partner=900&token=AAAA',
+      steamTradePartner: '900',
+      steamTradeToken: 'AAAA',
+      steamTradeUrlVerifiedAt: new Date(),
+    };
+
+    const ownedSkinItem = {
+      id: 10,
+      userId: 123,
+      skinId: 1,
+      status: 'owned',
+      source: 'purchase',
+      purchasePriceRub: new Prisma.Decimal('1000.00'),
+      sellPriceRub: new Prisma.Decimal('900.00'),
+      metadata: { providerPriceUsdThousandthsAtPurchase: 10000 },
+      skin: {
+        id: 1,
+        marketHashName: 'AK-47 | Redline (Field-Tested)',
+        provider: 'waxpeer',
+      },
+    };
+
+    function defaultListing(price: number = 9500) {
+      return {
+        itemId: 'listing-1',
+        name: ownedSkinItem.skin.marketHashName,
+        priceThousandths: price,
+        raw: { name: ownedSkinItem.skin.marketHashName, price, item_id: 'listing-1' },
+      };
+    }
+
+    function setupUserAndItem() {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(verifiedUser);
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(
+        ownedSkinItem,
+      );
+    }
+
+    it('rejects when withdrawal provider is unconfigured', async () => {
+      (waxpeerWithdrawal.isConfigured as jest.Mock).mockReturnValue(false);
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadGatewayException);
+    });
+
+    it('rejects when trade URL is missing', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+        ...verifiedUser,
+        steamTradeUrl: null,
+      });
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when item belongs to a different user', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(verifiedUser);
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue({
+        ...ownedSkinItem,
+        userId: 999,
+      });
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when item is not owned', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(verifiedUser);
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue({
+        ...ownedSkinItem,
+        status: 'sold',
+      });
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when skin provider is not waxpeer', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(verifiedUser);
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue({
+        ...ownedSkinItem,
+        skin: { ...ownedSkinItem.skin, provider: 'other' },
+      });
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('restores item and rejects when no listing found', async () => {
+      setupUserAndItem();
+      (prisma.inventoryItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.withdrawalRequest.create as jest.Mock).mockResolvedValue({
+        id: 7,
+        providerProjectId: 'withdrawal_pending_x',
+      });
+      (prisma.withdrawalRequest.update as jest.Mock).mockResolvedValue({
+        id: 7,
+        providerProjectId: 'withdrawal_7',
+      });
+      (waxpeerWithdrawal.findCheapestListing as jest.Mock).mockResolvedValue(
+        null,
+      );
+
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.inventoryItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 10, status: 'withdraw_pending' },
+          data: { status: 'owned' },
+        }),
+      );
+      expect(waxpeerWithdrawal.buyOneP2p).not.toHaveBeenCalled();
+    });
+
+    it('restores item when listing price exceeds cap', async () => {
+      setupUserAndItem();
+      (prisma.inventoryItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.withdrawalRequest.create as jest.Mock).mockResolvedValue({
+        id: 8,
+        providerProjectId: 'withdrawal_pending_x',
+      });
+      (prisma.withdrawalRequest.update as jest.Mock).mockResolvedValue({
+        id: 8,
+        providerProjectId: 'withdrawal_8',
+      });
+      (waxpeerWithdrawal.findCheapestListing as jest.Mock).mockResolvedValue(
+        defaultListing(20000),
+      );
+
+      await expect(
+        service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(waxpeerWithdrawal.buyOneP2p).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 10, status: 'withdraw_pending' },
+          data: { status: 'owned' },
+        }),
+      );
+    });
+
+    it('calls buy-one-p2p with item id, exact price, partner, token and project id on success', async () => {
+      setupUserAndItem();
+      (prisma.inventoryItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.withdrawalRequest.create as jest.Mock).mockResolvedValue({
+        id: 9,
+        providerProjectId: 'withdrawal_pending_x',
+      });
+      (prisma.withdrawalRequest.update as jest.Mock).mockResolvedValue({
+        id: 9,
+        providerProjectId: 'withdrawal_9',
+      });
+      (waxpeerWithdrawal.findCheapestListing as jest.Mock).mockResolvedValue(
+        defaultListing(9500),
+      );
+      (waxpeerWithdrawal.buyOneP2p as jest.Mock).mockResolvedValue({
+        success: true,
+        id: 'trade-1',
+        duplicateProjectId: false,
+        raw: { ok: true },
+      });
+      (prisma.inventoryItem.findUnique as jest.Mock)
+        .mockResolvedValueOnce(ownedSkinItem)
+        .mockResolvedValueOnce({ ...ownedSkinItem, status: 'withdraw_pending' });
+
+      const result = await service.withdrawInventoryItem(123, {
+        inventoryItemId: 10,
+      });
+
+      expect(waxpeerWithdrawal.buyOneP2p).toHaveBeenCalledWith({
+        projectId: 'withdrawal_9',
+        itemId: 'listing-1',
+        priceThousandths: 9500,
+        partner: '900',
+        token: 'AAAA',
+      });
+      expect(result.withdrawal.status).toBe('provider_purchase_pending');
     });
   });
 });

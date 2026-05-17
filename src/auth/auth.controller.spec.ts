@@ -56,12 +56,33 @@ describe('AuthController', () => {
   });
 
   describe('getMe', () => {
-    it('should return the user if present', () => {
+    it('should return a public user without trade token/partner', () => {
+      const verifiedAt = new Date();
       const req = {
-        user: { id: 2, displayName: 'AnotherUser' },
+        user: {
+          id: 2,
+          steamId: '76561198000000000',
+          displayName: 'AnotherUser',
+          avatar: 'http://example/avatar.png',
+          profileUrl: 'http://example/profile',
+          steamTradeUrl: 'https://steamcommunity.com/tradeoffer/new/',
+          steamTradePartner: '900',
+          steamTradeToken: 'SECRET_TOKEN',
+          steamTradeUrlVerifiedAt: verifiedAt,
+        },
       } as unknown as Request;
       const result = controller.getMe(req);
-      expect(result).toEqual({ id: 2, displayName: 'AnotherUser' });
+      expect(result).toEqual({
+        id: 2,
+        steamId: '76561198000000000',
+        displayName: 'AnotherUser',
+        avatar: 'http://example/avatar.png',
+        profileUrl: 'http://example/profile',
+        steamTradeUrl: 'https://steamcommunity.com/tradeoffer/new/',
+        steamTradeUrlVerifiedAt: verifiedAt,
+      });
+      expect(result).not.toHaveProperty('steamTradeToken');
+      expect(result).not.toHaveProperty('steamTradePartner');
     });
   });
 
@@ -75,6 +96,10 @@ describe('AuthController', () => {
         displayName: 'Local Test User',
         avatar: 'http://localhost/local-test-user-avatar.png',
         profileUrl: 'http://localhost/local-test-user',
+        steamTradeUrl: null,
+        steamTradePartner: null,
+        steamTradeToken: 'should-not-be-returned',
+        steamTradeUrlVerifiedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -91,7 +116,13 @@ describe('AuthController', () => {
       expect(authService.getOrCreateDevUser).toHaveBeenCalled();
       expect(req.session.regenerate).toHaveBeenCalledWith(expect.any(Function));
       expect(req.login).toHaveBeenCalledWith(user, expect.any(Function));
-      expect(result).toEqual({ user });
+      expect(result.user).not.toHaveProperty('steamTradeToken');
+      expect(result.user).not.toHaveProperty('steamTradePartner');
+      expect(result.user).toMatchObject({
+        id: 1,
+        steamId: 'local-test-user',
+        displayName: 'Local Test User',
+      });
     });
 
     it('should reject dev login unless explicitly enabled', async () => {

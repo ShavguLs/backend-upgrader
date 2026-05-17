@@ -14,10 +14,11 @@ This is the NestJS backend project.
    ```
 
 2. Environment Variables:
-   Copy `.env.example` to `.env` and fill in your database details.
+   Copy `.env.example` to `.env` and fill in your database, Steam, session, Plisio, and skin sync settings.
    ```bash
    cp .env.example .env
    ```
+   The npm scripts do not load `.env` automatically; make sure those variables are available in the process that starts Nest.
 
 3. Setup Database:
    Generate the Prisma client:
@@ -44,6 +45,8 @@ This API uses Steam OpenID for authentication and stores sessions in PostgreSQL.
 3. To test login locally, visit `http://localhost:3000/auth/steam` in your browser.
 4. Subsequent requests to `http://localhost:3000/auth/me` will return your authenticated profile.
 
+For local protected-flow testing without Steam, set `ENABLE_DEV_LOGIN=true` and call `POST /auth/dev-login`.
+
 ## Running the Application
 
 - **Development:**
@@ -60,3 +63,7 @@ You can verify the API is running by checking the health endpoint:
 ```
 GET http://localhost:3000/health
 ```
+
+## API Docs
+
+Endpoint docs and local development notes live in `docs/README.md`.

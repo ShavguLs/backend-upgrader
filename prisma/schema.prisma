@@ -11,18 +11,23 @@ datasource db {
 }
 
 model User {
-  id                    Int                    @id @default(autoincrement())
-  email                 String?                @unique
-  steamId               String                 @unique
-  displayName           String
-  avatar                String?
-  profileUrl            String?
-  wallet                Wallet?
-  deposits              Deposit[]
-  inventoryItems        InventoryItem[]
-  inventoryTransactions InventoryTransaction[]
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
+  id                      Int                    @id @default(autoincrement())
+  email                   String?                @unique
+  steamId                 String                 @unique
+  displayName             String
+  avatar                  String?
+  profileUrl              String?
+  steamTradeUrl           String?
+  steamTradePartner       String?
+  steamTradeToken         String?
+  steamTradeUrlVerifiedAt DateTime?
+  wallet                  Wallet?
+  deposits                Deposit[]
+  inventoryItems          InventoryItem[]
+  inventoryTransactions   InventoryTransaction[]
+  withdrawalRequests      WithdrawalRequest[]
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
 }
 
 model Wallet {
@@ -91,9 +96,38 @@ model InventoryItem {
   createdAt        DateTime               @default(now())
   updatedAt        DateTime               @updatedAt
   transactions     InventoryTransaction[]
+  withdrawalRequests WithdrawalRequest[]
 
   @@index([userId, status])
   @@index([skinId])
+}
+
+model WithdrawalRequest {
+  id                Int           @id @default(autoincrement())
+  userId            Int
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inventoryItemId   Int
+  inventoryItem     InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  status            String        @default("created")
+  provider          String        @default("waxpeer")
+  providerProjectId String        @unique
+  providerTradeId   String?
+  providerListingId String?
+  providerPrice     Int?
+  providerStatus    Int?
+  steamTradeUrl     String
+  errorMessage      String?
+  providerRawData   Json?
+  requestedAt       DateTime      @default(now())
+  lastCheckedAt     DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([userId, status])
+  @@index([inventoryItemId])
+  @@index([status, lastCheckedAt])
 }
 
 model InventoryTransaction {

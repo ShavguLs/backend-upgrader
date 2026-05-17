@@ -14,6 +14,7 @@ import { AuthenticatedGuard } from '../auth/authenticated.guard';
 import { BuySkinDto } from './dto/buy-skin.dto';
 import { ListSkinsDto } from './dto/list-skins.dto';
 import { SellInventoryItemDto } from './dto/sell-inventory-item.dto';
+import { WithdrawInventoryItemDto } from './dto/withdraw-inventory-item.dto';
 import { InventoryService } from './inventory.service';
 
 @Controller()
@@ -49,5 +50,15 @@ export class InventoryController {
   sellInventoryItem(@Req() req: Request, @Body() dto: SellInventoryItemDto) {
     const user = req.user as { id: number };
     return this.inventoryService.sellInventoryItem(user.id, dto);
+  }
+
+  @Post('inventory/withdraw')
+  @UseGuards(AuthenticatedGuard)
+  withdrawInventoryItem(
+    @Req() req: Request,
+    @Body() dto: WithdrawInventoryItemDto,
+  ) {
+    const user = req.user as { id: number };
+    return this.inventoryService.withdrawInventoryItem(user.id, dto);
   }
 }

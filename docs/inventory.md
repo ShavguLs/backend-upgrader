@@ -164,3 +164,75 @@ Required.
 | `400` | Invalid body or item is not owned by current user. |
 | `401` | Not authenticated. |
 | `404` | Item disappears after sale update. |
+
+## `POST /inventory/withdraw`
+
+Starts a real Waxpeer withdrawal for an owned virtual inventory item. The
+backend looks up an exact-name listing on Waxpeer, buys the cheapest listing at
+or below the item's purchase cap, and instructs Waxpeer to send the item to the
+user's saved Steam trade URL.
+
+### Requirements
+
+- The current user must have a verified Steam trade URL saved via
+  `PUT /auth/me/trade-url`.
+- The inventory item must be owned by the current user and have status
+  `owned`.
+- The skin must come from the `waxpeer` provider and have a market hash name.
+
+### Auth
+
+Required.
+
+### Request Body
+
+```json
+{
+  "inventoryItemId": 1
+}
+```
+
+### Success Response
+
+```json
+{
+  "item": {
+    "id": 1,
+    "status": "withdraw_pending"
+  },
+  "withdrawal": {
+    "id": 12,
+    "status": "provider_purchase_pending",
+    "provider": "waxpeer"
+  }
+}
+```
+
+### Statuses
+
+`InventoryItem.status` may transition to:
+
+- `owned` → `withdraw_pending` when withdrawal starts.
+- `withdraw_pending` → `withdrawn` when Waxpeer reports the trade as completed.
+- `withdraw_pending` → `owned` if the withdrawal is rolled back (no listing, listing exceeds cap, provider failure, or Waxpeer reports declined/refunded).
+
+`WithdrawalRequest.status` may be one of:
+
+- `created` (transient).
+- `provider_purchase_pending` after the Waxpeer buy request is sent and while we
+  wait for Steam trade acceptance.
+- `trade_sent` once Waxpeer reports the trade has been sent.
+- `completed` once Waxpeer reports delivery.
+- `failed` if the listing is missing, listing price exceeds the cap, or
+  Waxpeer reports declined/refunded.
+- `needs_review` if the request stays unresolved past
+  `WAXPEER_WITHDRAW_TIMEOUT_MINUTES`. The item stays locked until Waxpeer
+  reports failure or an admin verifies non-delivery.
+
+### Errors
+
+| Status | Reason |
+| --- | --- |
+| `400` | Missing trade URL, missing/foreign item, item not owned, skin not from Waxpeer, no eligible Waxpeer listing, listing exceeds the item's purchase cap, or Waxpeer rejected the buy. |
+| `401` | Not authenticated. |
+| `502` | Withdrawal provider is unconfigured or unreachable. |

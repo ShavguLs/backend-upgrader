@@ -21,6 +21,7 @@ describe('InventoryController', () => {
             getInventory: jest.fn(),
             buySkin: jest.fn(),
             sellInventoryItem: jest.fn(),
+            withdrawInventoryItem: jest.fn(),
           },
         },
       ],
@@ -64,6 +65,22 @@ describe('InventoryController', () => {
       response,
     );
     expect(service.buySkin).toHaveBeenCalledWith(123, { skinId: 1 });
+  });
+
+  it('should use authenticated user id and item id for withdraw endpoint', async () => {
+    const req = { user: { id: 123 } } as unknown as Request;
+    const response = {
+      item: { id: 10, status: 'withdraw_pending' },
+      withdrawal: { id: 1, status: 'provider_purchase_pending', provider: 'waxpeer' },
+    };
+    (service.withdrawInventoryItem as jest.Mock).mockResolvedValue(response);
+
+    await expect(
+      controller.withdrawInventoryItem(req, { inventoryItemId: 10 }),
+    ).resolves.toEqual(response);
+    expect(service.withdrawInventoryItem).toHaveBeenCalledWith(123, {
+      inventoryItemId: 10,
+    });
   });
 
   it('should use authenticated user id and item id for sell endpoint', async () => {

@@ -1,6 +1,8 @@
 # Skins API
 
-Skin catalog endpoints are public and only return active skins.
+Skin catalog endpoints are public, only return active skins, and are implemented by `InventoryController`.
+
+Catalog data can come from `npm run prisma:seed` or from the Waxpeer bootstrap sync when `SKIN_PROVIDER=WAXPEER`/`waxpeer`.
 
 ## `GET /skins`
 

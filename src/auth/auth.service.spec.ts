@@ -1,12 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BadRequestException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WaxpeerWithdrawalProvider } from '../skins/providers/waxpeer-withdrawal.provider';
 
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: PrismaService;
+  let waxpeer: { isConfigured: jest.Mock; checkTradeLink: jest.Mock };
 
   beforeEach(async () => {
+    waxpeer = {
+      isConfigured: jest.fn().mockReturnValue(false),
+      checkTradeLink: jest.fn(),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -15,9 +22,11 @@ describe('AuthService', () => {
           useValue: {
             user: {
               upsert: jest.fn(),
+              update: jest.fn(),
             },
           },
         },
+        { provide: WaxpeerWithdrawalProvider, useValue: waxpeer },
       ],
     }).compile();
 
@@ -126,5 +135,110 @@ describe('AuthService', () => {
       },
     });
     expect(result).toEqual(expectedUser);
+  });
+
+  describe('updateTradeUrl', () => {
+    it('rejects invalid URL', async () => {
+      await expect(
+        service.updateTradeUrl(1, 'not-a-url'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects URL without partner/token', async () => {
+      await expect(
+        service.updateTradeUrl(
+          1,
+          'https://steamcommunity.com/tradeoffer/new/',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects when provider unconfigured and ALLOW_UNVERIFIED_TRADE_URL is not set', async () => {
+      const previous = process.env.ALLOW_UNVERIFIED_TRADE_URL;
+      delete process.env.ALLOW_UNVERIFIED_TRADE_URL;
+      try {
+        const url =
+          'https://steamcommunity.com/tradeoffer/new/?partner=900&token=ABcd_-';
+        await expect(service.updateTradeUrl(1, url)).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        expect(prisma.user.update).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.ALLOW_UNVERIFIED_TRADE_URL;
+        } else {
+          process.env.ALLOW_UNVERIFIED_TRADE_URL = previous;
+        }
+      }
+    });
+
+    it('saves verified trade URL when provider unconfigured and ALLOW_UNVERIFIED_TRADE_URL=true', async () => {
+      const previous = process.env.ALLOW_UNVERIFIED_TRADE_URL;
+      process.env.ALLOW_UNVERIFIED_TRADE_URL = 'true';
+      try {
+        const url =
+          'https://steamcommunity.com/tradeoffer/new/?partner=900&token=ABcd_-';
+        (prisma.user.update as jest.Mock).mockResolvedValue({
+          id: 1,
+          steamTradeUrl: url,
+          steamTradePartner: '900',
+          steamTradeToken: 'ABcd_-',
+          steamTradeUrlVerifiedAt: new Date(),
+        });
+
+        const result = await service.updateTradeUrl(1, url);
+        expect(result.steamTradeUrl).toBe(url);
+        expect(prisma.user.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 1 },
+            data: expect.objectContaining({
+              steamTradeUrl: url,
+              steamTradePartner: '900',
+              steamTradeToken: 'ABcd_-',
+            }),
+          }),
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.ALLOW_UNVERIFIED_TRADE_URL;
+        } else {
+          process.env.ALLOW_UNVERIFIED_TRADE_URL = previous;
+        }
+      }
+    });
+
+    it('validates with Waxpeer when configured', async () => {
+      waxpeer.isConfigured.mockReturnValue(true);
+      waxpeer.checkTradeLink.mockResolvedValue({
+        success: true,
+        partner: '900',
+        token: 'ABcd',
+      });
+      (prisma.user.update as jest.Mock).mockResolvedValue({
+        id: 1,
+        steamTradeUrl: 'x',
+        steamTradePartner: '900',
+        steamTradeToken: 'ABcd',
+        steamTradeUrlVerifiedAt: new Date(),
+      });
+
+      const url =
+        'https://steamcommunity.com/tradeoffer/new/?partner=900&token=ABcd';
+      await service.updateTradeUrl(1, url);
+      expect(waxpeer.checkTradeLink).toHaveBeenCalledWith(url);
+    });
+
+    it('rejects when Waxpeer says invalid', async () => {
+      waxpeer.isConfigured.mockReturnValue(true);
+      waxpeer.checkTradeLink.mockResolvedValue({
+        success: false,
+        message: 'Invalid',
+      });
+      const url =
+        'https://steamcommunity.com/tradeoffer/new/?partner=900&token=ABcd';
+      await expect(service.updateTradeUrl(1, url)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
   });
 });

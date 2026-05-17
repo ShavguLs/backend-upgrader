@@ -44,9 +44,50 @@ Required.
   "steamId": "76561198000000000",
   "displayName": "Player",
   "avatar": "https://...",
-  "profileUrl": "https://steamcommunity.com/id/..."
+  "profileUrl": "https://steamcommunity.com/id/...",
+  "steamTradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=...&token=...",
+  "steamTradeUrlVerifiedAt": "2026-05-17T12:00:00.000Z"
 }
 ```
+
+The trade URL `partner` and `token` are never returned individually; the verified
+Steam trade URL is the only credential surface exposed to the client.
+
+## `PUT /auth/me/trade-url`
+
+Saves and verifies the current user's Steam trade URL. The URL must be in the
+form `https://steamcommunity.com/tradeoffer/new/?partner=...&token=...`. If the
+Waxpeer API is configured, the URL is validated through the provider before it
+is saved.
+
+### Auth
+
+Required.
+
+### Request Body
+
+```json
+{
+  "steamTradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=900267897&token=P2YkRJOk"
+}
+```
+
+### Response
+
+```json
+{
+  "id": 1,
+  "steamTradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=900267897&token=P2YkRJOk",
+  "steamTradeUrlVerifiedAt": "2026-05-17T12:00:00.000Z"
+}
+```
+
+### Errors
+
+| Status | Reason |
+| --- | --- |
+| `400` | URL is malformed or rejected by the withdrawal provider. |
+| `401` | Not authenticated. |
 
 ## `POST /auth/dev-login`
 
