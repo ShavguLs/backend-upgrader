@@ -70,10 +70,17 @@ export class WaxpeerProvider implements SkinProvider {
     if (typeof raw.img !== 'string' || raw.img.length === 0) {
       return null;
     }
-    if (typeof raw.min !== 'number' || !Number.isFinite(raw.min) || raw.min <= 0) {
+    if (
+      typeof raw.min !== 'number' ||
+      !Number.isFinite(raw.min) ||
+      raw.min <= 0
+    ) {
       return null;
     }
-    if (raw.count !== undefined && (typeof raw.count !== 'number' || raw.count <= 0)) {
+    if (
+      raw.count !== undefined &&
+      (typeof raw.count !== 'number' || raw.count <= 0)
+    ) {
       return null;
     }
 

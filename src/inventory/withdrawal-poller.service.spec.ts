@@ -24,6 +24,7 @@ describe('WithdrawalPollerService', () => {
       withdrawalRequest: {
         findMany: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       inventoryItem: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -57,9 +58,9 @@ describe('WithdrawalPollerService', () => {
 
     await service.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 1 },
+        where: expect.objectContaining({ id: 1 }),
         data: expect.objectContaining({ status: 'completed', providerStatus: 5 }),
       }),
     );
@@ -79,7 +80,7 @@ describe('WithdrawalPollerService', () => {
 
     await service.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'failed', providerStatus: 6 }),
       }),
@@ -100,7 +101,7 @@ describe('WithdrawalPollerService', () => {
 
     await service.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'trade_sent', providerStatus: 4 }),
       }),
@@ -129,7 +130,7 @@ describe('WithdrawalPollerService', () => {
 
     await freshService.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'needs_review' }),
       }),
@@ -158,7 +159,7 @@ describe('WithdrawalPollerService', () => {
 
     await freshService.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.not.objectContaining({ status: 'needs_review' }),
       }),
@@ -188,7 +189,7 @@ describe('WithdrawalPollerService', () => {
 
     await freshService.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.not.objectContaining({ status: 'needs_review' }),
       }),
@@ -218,7 +219,7 @@ describe('WithdrawalPollerService', () => {
 
     await freshService.pollPendingWithdrawals();
 
-    expect(prisma.withdrawalRequest.update).toHaveBeenCalledWith(
+    expect(prisma.withdrawalRequest.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'needs_review' }),
       }),

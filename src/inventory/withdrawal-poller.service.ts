@@ -137,9 +137,7 @@ export class WithdrawalPollerService
     }
 
     const unknownAfterGrace =
-      !known &&
-      !withdrawal.providerTradeId &&
-      elapsedMs > this.recoveryGraceMs;
+      !known && !withdrawal.providerTradeId && elapsedMs > this.recoveryGraceMs;
 
     let nextStatus = withdrawal.status;
     if (providerStatus === 4) {
@@ -156,47 +154,80 @@ export class WithdrawalPollerService
     }
 
     const previousStatus = withdrawal.status;
-    await this.prisma.withdrawalRequest.update({
-      where: { id: withdrawal.id },
-      data: {
-        status: nextStatus,
-        providerStatus: providerStatus ?? undefined,
-        providerTradeId: status?.tradeId ?? undefined,
-        providerRawData:
-          status?.raw !== undefined
-            ? (status.raw as Prisma.InputJsonValue)
-            : undefined,
-        lastCheckedAt: new Date(now),
-      },
-    });
+    const providerRawData: Prisma.InputJsonValue | undefined =
+      status?.raw !== undefined
+        ? (status.raw as Prisma.InputJsonValue)
+        : undefined;
 
-    if (nextStatus === 'needs_review' && previousStatus !== 'needs_review') {
-      await this.prisma.inventoryTransaction.create({
+    if (nextStatus === previousStatus) {
+      // No transition — only refresh bookkeeping. Guard on the state we
+      // originally read (status + non-terminal) so a stale poller cannot
+      // overwrite providerStatus / providerTradeId / raw data on a row
+      // that another instance has already completed, failed, or moved
+      // out of the previous status.
+      await this.prisma.withdrawalRequest.updateMany({
+        where: {
+          id: withdrawal.id,
+          status: previousStatus,
+          completedAt: null,
+          failedAt: null,
+        },
         data: {
-          userId: withdrawal.userId,
-          inventoryItemId: withdrawal.inventoryItemId,
-          type: 'withdraw_needs_review',
-          amountRub: new Prisma.Decimal(0),
-          metadata: {
-            withdrawalId: withdrawal.id,
-            providerStatus: providerStatus ?? null,
-          },
+          providerStatus: providerStatus ?? undefined,
+          providerTradeId: status?.tradeId ?? undefined,
+          providerRawData,
+          lastCheckedAt: new Date(now),
         },
       });
-    } else if (nextStatus === 'trade_sent' && previousStatus !== 'trade_sent') {
-      await this.prisma.inventoryTransaction.create({
-        data: {
-          userId: withdrawal.userId,
-          inventoryItemId: withdrawal.inventoryItemId,
-          type: 'withdraw_trade_sent',
-          amountRub: new Prisma.Decimal(0),
-          metadata: {
-            withdrawalId: withdrawal.id,
-            providerTradeId: status?.tradeId ?? null,
-          },
-        },
-      });
+      return;
     }
+
+    // Compare-and-set the transition. Only the worker that owns the
+    // transition writes the audit row, preventing duplicate
+    // `withdraw_trade_sent` / `withdraw_needs_review` rows across instances.
+    await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.withdrawalRequest.updateMany({
+        where: { id: withdrawal.id, status: previousStatus },
+        data: {
+          status: nextStatus,
+          providerStatus: providerStatus ?? undefined,
+          providerTradeId: status?.tradeId ?? undefined,
+          providerRawData,
+          lastCheckedAt: new Date(now),
+        },
+      });
+      if (claim.count === 0) {
+        return;
+      }
+
+      if (nextStatus === 'needs_review') {
+        await tx.inventoryTransaction.create({
+          data: {
+            userId: withdrawal.userId,
+            inventoryItemId: withdrawal.inventoryItemId,
+            type: 'withdraw_needs_review',
+            amountRub: new Prisma.Decimal(0),
+            metadata: {
+              withdrawalId: withdrawal.id,
+              providerStatus: providerStatus ?? null,
+            },
+          },
+        });
+      } else if (nextStatus === 'trade_sent') {
+        await tx.inventoryTransaction.create({
+          data: {
+            userId: withdrawal.userId,
+            inventoryItemId: withdrawal.inventoryItemId,
+            type: 'withdraw_trade_sent',
+            amountRub: new Prisma.Decimal(0),
+            metadata: {
+              withdrawalId: withdrawal.id,
+              providerTradeId: status?.tradeId ?? null,
+            },
+          },
+        });
+      }
+    });
   }
 
   private async completeWithdrawal(
@@ -205,8 +236,16 @@ export class WithdrawalPollerService
     tradeId?: string,
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      await tx.withdrawalRequest.update({
-        where: { id: withdrawal.id },
+      // Compare-and-set: only this process should perform the transition
+      // and write the audit transaction. Prevents duplicate
+      // withdraw_complete rows when multiple backend instances poll.
+      const claim = await tx.withdrawalRequest.updateMany({
+        where: {
+          id: withdrawal.id,
+          status: { in: POLLABLE_STATUSES },
+          completedAt: null,
+          failedAt: null,
+        },
         data: {
           status: 'completed',
           providerStatus: 5,
@@ -217,6 +256,9 @@ export class WithdrawalPollerService
           lastCheckedAt: new Date(),
         },
       });
+      if (claim.count === 0) {
+        return;
+      }
       await tx.inventoryItem.updateMany({
         where: {
           id: withdrawal.inventoryItemId,
@@ -242,8 +284,13 @@ export class WithdrawalPollerService
     raw?: unknown,
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      await tx.withdrawalRequest.update({
-        where: { id: withdrawal.id },
+      const claim = await tx.withdrawalRequest.updateMany({
+        where: {
+          id: withdrawal.id,
+          status: { in: POLLABLE_STATUSES },
+          completedAt: null,
+          failedAt: null,
+        },
         data: {
           status: 'failed',
           providerStatus: 6,
@@ -254,6 +301,9 @@ export class WithdrawalPollerService
           lastCheckedAt: new Date(),
         },
       });
+      if (claim.count === 0) {
+        return;
+      }
       await tx.inventoryItem.updateMany({
         where: {
           id: withdrawal.inventoryItemId,

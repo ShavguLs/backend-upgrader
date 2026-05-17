@@ -53,7 +53,9 @@ export function parseWeapon(marketHashName: string): string | null {
   return weapon.length > 0 ? weapon : null;
 }
 
-export function mapRarityColor(color: string | undefined | null): string | null {
+export function mapRarityColor(
+  color: string | undefined | null,
+): string | null {
   if (!color) {
     return null;
   }

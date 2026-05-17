@@ -146,10 +146,7 @@ describe('AuthService', () => {
 
     it('rejects URL without partner/token', async () => {
       await expect(
-        service.updateTradeUrl(
-          1,
-          'https://steamcommunity.com/tradeoffer/new/',
-        ),
+        service.updateTradeUrl(1, 'https://steamcommunity.com/tradeoffer/new/'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 

@@ -90,10 +90,9 @@ export class WaxpeerWithdrawalProvider {
   }
 
   private get baseUrl(): string {
-    return (process.env.WAXPEER_API_BASE_URL || 'https://api.waxpeer.com').replace(
-      /\/$/,
-      '',
-    );
+    return (
+      process.env.WAXPEER_API_BASE_URL || 'https://api.waxpeer.com'
+    ).replace(/\/$/, '');
   }
 
   private get apiKey(): string | undefined {
@@ -168,9 +167,9 @@ export class WaxpeerWithdrawalProvider {
       const itemsType =
         data === null || data === undefined
           ? 'undefined'
-          : Array.isArray((data as SearchItemsResponse).items)
+          : Array.isArray(data.items)
             ? 'array'
-            : typeof (data as SearchItemsResponse).items;
+            : typeof data.items;
       this.logger.warn(
         `Waxpeer listing search returned unusable response: ` +
           `skin="${marketHashName}" success=${data?.success ?? 'undefined'} ` +
@@ -198,7 +197,11 @@ export class WaxpeerWithdrawalProvider {
       }
       exactMatchCount += 1;
 
-      if (typeof raw.price !== 'number' || !Number.isFinite(raw.price) || raw.price <= 0) {
+      if (
+        typeof raw.price !== 'number' ||
+        !Number.isFinite(raw.price) ||
+        raw.price <= 0
+      ) {
         continue;
       }
       const itemId =

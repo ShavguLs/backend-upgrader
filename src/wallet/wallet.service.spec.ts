@@ -259,6 +259,7 @@ describe('WalletService', () => {
         status: 'new',
         creditedAt: null,
       });
+      (prisma.deposit.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
 
       await service.handleCallback({
         verify_hash: 'ok',
@@ -272,11 +273,41 @@ describe('WalletService', () => {
       });
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
-      expect(prisma.deposit.update).toHaveBeenCalledWith({
-        where: { id: 1 },
+      expect(prisma.deposit.updateMany).toHaveBeenCalledWith({
+        where: { id: 1, creditedAt: null },
         data: expect.objectContaining({
           status: 'pending',
         }),
+      });
+    });
+
+    it('should not overwrite an already-credited deposit on a late non-completed callback', async () => {
+      (plisioService.verifyHash as jest.Mock).mockReturnValue(true);
+      (prisma.deposit.findUnique as jest.Mock).mockResolvedValue({
+        id: 1,
+        userId: 1,
+        amountRub: new Prisma.Decimal(100),
+        status: 'completed',
+        creditedAt: null,
+      });
+      (prisma.deposit.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await service.handleCallback({
+        verify_hash: 'ok',
+        status: 'pending',
+        order_number: 'DEP_1',
+        txn_id: '1',
+        amount: '1',
+        source_amount: '1',
+        source_currency: '1',
+        currency: '1',
+      });
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.deposit.update).not.toHaveBeenCalled();
+      expect(prisma.deposit.updateMany).toHaveBeenCalledWith({
+        where: { id: 1, creditedAt: null },
+        data: expect.objectContaining({ status: 'pending' }),
       });
     });
   });

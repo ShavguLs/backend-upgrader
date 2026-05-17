@@ -26,6 +26,7 @@ model User {
   inventoryItems          InventoryItem[]
   inventoryTransactions   InventoryTransaction[]
   withdrawalRequests      WithdrawalRequest[]
+  upgradeAttempts         UpgradeAttempt[]
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
 }
@@ -75,6 +76,7 @@ model Skin {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   inventoryItems  InventoryItem[]
+  upgradeAttempts UpgradeAttempt[]
 
   @@index([isActive, priceRub])
   @@index([weapon])
@@ -83,20 +85,22 @@ model Skin {
 }
 
 model InventoryItem {
-  id               Int                    @id @default(autoincrement())
-  userId           Int
-  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  skinId           Int
-  skin             Skin                   @relation(fields: [skinId], references: [id])
-  purchasePriceRub Decimal                @db.Decimal(18, 2)
-  sellPriceRub     Decimal                @db.Decimal(18, 2)
-  status           String                 @default("owned")
-  source           String                 @default("purchase")
-  metadata         Json?
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-  transactions     InventoryTransaction[]
-  withdrawalRequests WithdrawalRequest[]
+  id                    Int                    @id @default(autoincrement())
+  userId                Int
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skinId                Int
+  skin                  Skin                   @relation(fields: [skinId], references: [id])
+  purchasePriceRub      Decimal                @db.Decimal(18, 2)
+  sellPriceRub          Decimal                @db.Decimal(18, 2)
+  status                String                 @default("owned")
+  source                String                 @default("purchase")
+  metadata              Json?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  transactions          InventoryTransaction[]
+  withdrawalRequests    WithdrawalRequest[]
+  upgradeAttemptsAsSource UpgradeAttempt[]     @relation("UpgradeAttemptSource")
+  upgradeAttemptsAsWon    UpgradeAttempt[]     @relation("UpgradeAttemptWon")
 
   @@index([userId, status])
   @@index([skinId])
@@ -143,6 +147,32 @@ model InventoryTransaction {
 
   @@index([userId, createdAt])
   @@index([inventoryItemId])
+}
+
+model UpgradeAttempt {
+  id                     Int            @id @default(autoincrement())
+  userId                 Int
+  user                   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceInventoryItemId  Int
+  sourceInventoryItem    InventoryItem  @relation("UpgradeAttemptSource", fields: [sourceInventoryItemId], references: [id])
+  targetSkinId           Int
+  targetSkin             Skin           @relation(fields: [targetSkinId], references: [id])
+  wonInventoryItemId     Int?
+  wonInventoryItem       InventoryItem? @relation("UpgradeAttemptWon", fields: [wonInventoryItemId], references: [id])
+  sourceValueRub         Decimal        @db.Decimal(18, 2)
+  targetPriceRub         Decimal        @db.Decimal(18, 2)
+  displayedChancePercent Decimal        @db.Decimal(7, 4)
+  effectiveChancePercent Decimal        @db.Decimal(7, 4)
+  houseEdgePercent       Decimal        @db.Decimal(7, 4)
+  rollPercent            Decimal        @db.Decimal(7, 4)
+  result                 String
+  metadata               Json?
+  createdAt              DateTime       @default(now())
+
+  @@index([userId, createdAt])
+  @@index([sourceInventoryItemId])
+  @@index([targetSkinId])
+  @@index([wonInventoryItemId])
 }
 
 model Session {

@@ -26,6 +26,7 @@ Steam strategy construction requires `STEAM_RETURN_URL`, `STEAM_REALM`, and `STE
 - [Health API](./health.md)
 - [Skins API](./skins.md)
 - [Inventory API](./inventory.md)
+- [Upgrader API](./upgrader.md)
 - [Wallet API](./wallet.md)
 - [Errors](./errors.md)
 - [Local Development](./local-development.md)
@@ -47,6 +48,8 @@ Steam strategy construction requires `STEAM_RETURN_URL`, `STEAM_REALM`, and `STE
 | `POST` | `/inventory/buy` | Yes | Buy a skin |
 | `POST` | `/inventory/sell` | Yes | Sell an owned inventory item |
 | `POST` | `/inventory/withdraw` | Yes | Withdraw an owned item as a real Waxpeer skin |
+| `GET` | `/upgrader/options` | Yes | List target skins for a chance tier and source item |
+| `POST` | `/upgrader/attempt` | Yes | Risk an inventory item to win a higher-priced skin |
 | `GET` | `/wallet` | Yes | Get wallet and recent deposits |
 | `POST` | `/wallet/deposits` | Yes | Create Plisio deposit invoice |
 | `POST` | `/wallet/plisio/callback` | No | Plisio payment callback |

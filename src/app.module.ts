@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { SkinsModule } from './skins/skins.module';
+import { UpgraderModule } from './upgrader/upgrader.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { SkinsModule } from './skins/skins.module';
     WalletModule,
     InventoryModule,
     SkinsModule,
+    UpgraderModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -480,15 +480,37 @@ export class InventoryService {
       );
     }
 
-    await this.prisma.withdrawalRequest.update({
-      where: { id: withdrawal.id },
-      data: {
+    // Compare-and-set: only refresh trade metadata if the row is still
+    // in `provider_purchase_pending` (and non-terminal). The poller may
+    // have already transitioned the withdrawal to trade_sent / completed /
+    // failed / needs_review while the provider buy was in flight; we
+    // must not regress that status back to provider_purchase_pending.
+    const claim = await this.prisma.withdrawalRequest.updateMany({
+      where: {
+        id: withdrawal.id,
         status: 'provider_purchase_pending',
+        completedAt: null,
+        failedAt: null,
+      },
+      data: {
         providerTradeId: buy.id,
         providerRawData: buy.raw as Prisma.InputJsonValue,
         lastCheckedAt: new Date(),
       },
     });
+
+    let currentStatus: string = 'provider_purchase_pending';
+    if (claim.count === 0) {
+      const current = await this.prisma.withdrawalRequest.findUnique({
+        where: { id: withdrawal.id },
+        select: { status: true },
+      });
+      currentStatus = current?.status ?? 'provider_purchase_pending';
+      this.logger.log(
+        `Withdrawal ${withdrawal.id} already advanced to ${currentStatus} ` +
+          `by poller before provider buy returned; not regressing status.`,
+      );
+    }
 
     await this.prisma.inventoryTransaction.create({
       data: {
@@ -515,7 +537,7 @@ export class InventoryService {
       item,
       withdrawal: {
         id: withdrawal.id,
-        status: 'provider_purchase_pending',
+        status: currentStatus,
         provider: 'waxpeer',
       },
     };
@@ -530,18 +552,33 @@ export class InventoryService {
   ): Promise<void> {
     try {
       await this.prisma.$transaction(async (tx) => {
-        await tx.withdrawalRequest.update({
-          where: { id: withdrawalId },
+        // Compare-and-set: only fail the withdrawal if it is still in a
+        // pre-terminal, pre-trade-sent state. If the poller has already
+        // transitioned the row to completed / trade_sent / needs_review /
+        // failed while the provider call was in flight, we must not
+        // overwrite that state — and must not double-restore the item or
+        // emit a duplicate withdraw_fail audit row.
+        const claim = await tx.withdrawalRequest.updateMany({
+          where: {
+            id: withdrawalId,
+            status: { in: ['created', 'provider_purchase_pending'] },
+            completedAt: null,
+            failedAt: null,
+          },
           data: {
             status: 'failed',
             errorMessage,
             failedAt: new Date(),
             providerRawData:
-              raw !== undefined
-                ? (raw as Prisma.InputJsonValue)
-                : undefined,
+              raw !== undefined ? (raw as Prisma.InputJsonValue) : undefined,
           },
         });
+        if (claim.count === 0) {
+          this.logger.log(
+            `Withdrawal ${withdrawalId} already advanced past pending; skipping rollback.`,
+          );
+          return;
+        }
         await tx.inventoryItem.updateMany({
           where: { id: inventoryItemId, status: 'withdraw_pending' },
           data: { status: 'owned' },
@@ -567,10 +604,19 @@ export class InventoryService {
     withdrawalId: number,
     errorMessage: string,
   ): Promise<void> {
-    await this.prisma.withdrawalRequest.update({
-      where: { id: withdrawalId },
-      data: {
+    // Compare-and-set: never regress a withdrawal that the poller has
+    // already moved to a terminal/review state (completed, failed,
+    // needs_review, trade_sent) while the provider call was in flight.
+    // Only refresh bookkeeping on a row that is still
+    // provider_purchase_pending and non-terminal.
+    await this.prisma.withdrawalRequest.updateMany({
+      where: {
+        id: withdrawalId,
         status: 'provider_purchase_pending',
+        completedAt: null,
+        failedAt: null,
+      },
+      data: {
         errorMessage,
         lastCheckedAt: new Date(),
       },

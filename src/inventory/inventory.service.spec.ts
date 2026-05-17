@@ -64,6 +64,7 @@ describe('InventoryService', () => {
             withdrawalRequest: {
               create: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
               findUnique: jest.fn(),
             },
             $transaction: jest.fn((arg) => {

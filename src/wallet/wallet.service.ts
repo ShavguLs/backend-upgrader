@@ -162,15 +162,23 @@ export class WalletService {
         `Successfully credited deposit ${orderNumber} for user ${deposit.userId}`,
       );
     } else {
-      // Just update status and callback payload for non-completed
-      await this.prisma.deposit.update({
-        where: { id: deposit.id },
+      // Only update if the deposit has not been credited yet — a late
+      // non-completed callback must never overwrite the "completed" status
+      // of an already-credited deposit.
+      const result = await this.prisma.deposit.updateMany({
+        where: { id: deposit.id, creditedAt: null },
         data: {
           status,
           rawCallback: payload,
         },
       });
-      this.logger.log(`Updated deposit ${orderNumber} status to ${status}`);
+      if (result.count === 0) {
+        this.logger.log(
+          `Deposit ${orderNumber} already credited; ignoring late ${status} callback.`,
+        );
+      } else {
+        this.logger.log(`Updated deposit ${orderNumber} status to ${status}`);
+      }
     }
 
     return { success: true };

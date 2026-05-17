@@ -42,9 +42,9 @@ describe('skin-normalizer', () => {
   describe('parseWeapon', () => {
     it('parses left side of pipe', () => {
       expect(parseWeapon('AK-47 | Redline (Field-Tested)')).toBe('AK-47');
-      expect(parseWeapon('Desert Eagle | Mecha Industries (Field-Tested)')).toBe(
-        'Desert Eagle',
-      );
+      expect(
+        parseWeapon('Desert Eagle | Mecha Industries (Field-Tested)'),
+      ).toBe('Desert Eagle');
     });
 
     it('returns null when no pipe present', () => {

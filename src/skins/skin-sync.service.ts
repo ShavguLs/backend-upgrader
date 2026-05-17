@@ -177,10 +177,7 @@ export class SkinSyncService
       where: {
         provider: providerName,
         isActive: true,
-        OR: [
-          { lastSyncedAt: null },
-          { lastSyncedAt: { lt: threshold } },
-        ],
+        OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: threshold } }],
       },
       data: { isActive: false },
     });
