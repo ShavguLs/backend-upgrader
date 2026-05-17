@@ -114,16 +114,16 @@ export class WalletService {
       this.assertCallbackAmountMatchesDeposit(payload, deposit);
     }
 
-    // Check if already credited
-    if (deposit.creditedAt && isCompleted) {
+    // Ignore all later callbacks once a deposit has been credited.
+    if (deposit.creditedAt) {
       this.logger.log(
-        `Deposit ${orderNumber} already credited. Ignoring duplicate callback.`,
+        `Deposit ${orderNumber} already credited. Ignoring callback.`,
       );
       return { success: true, message: 'Already credited' };
     }
 
     // Start a transaction if we are crediting
-    if (isCompleted && !deposit.creditedAt) {
+    if (isCompleted) {
       const credited = await this.prisma.$transaction(async (prisma) => {
         const claim = await prisma.deposit.updateMany({
           where: { id: deposit.id, creditedAt: null },

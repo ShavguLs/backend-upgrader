@@ -26,17 +26,7 @@ Not required directly. Steam must complete the login flow successfully.
 
 ### Response
 
-Returns the logged-in user as JSON and establishes the session.
-
-```json
-{
-  "id": 1,
-  "steamId": "76561198000000000",
-  "displayName": "Player",
-  "avatar": "https://...",
-  "profileUrl": "https://steamcommunity.com/id/..."
-}
-```
+Redirects to `FRONTEND_URL` (or `http://localhost:3001`) and establishes the session.
 
 ## `GET /auth/me`
 

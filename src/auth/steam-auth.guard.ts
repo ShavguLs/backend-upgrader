@@ -1,4 +1,8 @@
-import { ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  ExecutionContext,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 
@@ -6,10 +10,29 @@ import type { Request } from 'express';
 export class SteamAuthGuard extends AuthGuard('steam') {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const canActivate = (await super.canActivate(context)) as boolean;
-    const request = context.switchToHttp().getRequest<Request>();
+    if (!canActivate) {
+      return false;
+    }
 
+    const request = context.switchToHttp().getRequest<Request>();
+    const user = request.user;
+
+    await new Promise<void>((resolve, reject) => {
+      request.session.regenerate((err: Error | null) => {
+        if (err) {
+          reject(
+            new InternalServerErrorException('Session regeneration failed'),
+          );
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    request.user = user;
     await super.logIn(request);
 
-    return canActivate;
+    return true;
   }
 }

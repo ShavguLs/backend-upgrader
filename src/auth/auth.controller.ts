@@ -26,11 +26,8 @@ export class AuthController {
 
   @Get('steam/return')
   @UseGuards(SteamAuthGuard)
-  steamAuthReturn(@Req() req: Request, @Res() res: Response) {
-    // Successfully authenticated, user is in req.user
-    // Usually we would redirect to a frontend here.
-    // As per plan: "Returns the logged-in user as JSON because there is no frontend yet."
-    return res.json(req.user);
+  steamAuthReturn(@Res() res: Response) {
+    return res.redirect(process.env.FRONTEND_URL || 'http://localhost:3001');
   }
 
   @Get('me')
@@ -49,13 +46,22 @@ export class AuthController {
     const user = await this.authService.getOrCreateDevUser();
 
     return new Promise<{ user: typeof user }>((resolve, reject) => {
-      req.login(user, (err: Error | null) => {
+      req.session.regenerate((err: Error | null) => {
         if (err) {
-          reject(new InternalServerErrorException('Error logging in'));
+          reject(
+            new InternalServerErrorException('Session regeneration failed'),
+          );
           return;
         }
 
-        resolve({ user });
+        req.login(user, (err: Error | null) => {
+          if (err) {
+            reject(new InternalServerErrorException('Error logging in'));
+            return;
+          }
+
+          resolve({ user });
+        });
       });
     });
   }

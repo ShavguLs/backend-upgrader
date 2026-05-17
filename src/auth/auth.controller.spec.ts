@@ -43,17 +43,15 @@ describe('AuthController', () => {
   });
 
   describe('steamAuthReturn', () => {
-    it('should return the user from the request', () => {
-      const req = {
-        user: { id: 1, displayName: 'TestUser' },
-      } as unknown as Request;
+    it('should redirect to the frontend', () => {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
       const res = {
-        json: jest.fn().mockImplementation((val) => val),
+        redirect: jest.fn().mockImplementation((url) => url),
       } as unknown as Response;
 
-      const result = controller.steamAuthReturn(req, res);
-      expect(result).toEqual({ id: 1, displayName: 'TestUser' });
-      expect(res.json).toHaveBeenCalledWith(req.user);
+      const result = controller.steamAuthReturn(res);
+      expect(result).toBe(frontendUrl);
+      expect(res.redirect).toHaveBeenCalledWith(frontendUrl);
     });
   });
 
@@ -82,12 +80,16 @@ describe('AuthController', () => {
       };
       jest.mocked(authService.getOrCreateDevUser).mockResolvedValue(user);
       const req = {
+        session: {
+          regenerate: jest.fn((cb) => cb(null)),
+        },
         login: jest.fn((loginUser, cb) => cb(null)),
       } as unknown as Request;
 
       const result = await controller.devLogin(req);
 
       expect(authService.getOrCreateDevUser).toHaveBeenCalled();
+      expect(req.session.regenerate).toHaveBeenCalledWith(expect.any(Function));
       expect(req.login).toHaveBeenCalledWith(user, expect.any(Function));
       expect(result).toEqual({ user });
     });
