@@ -133,6 +133,158 @@ describe('InventoryService', () => {
         }),
       );
     });
+
+    it('should filter by minPriceRub only', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(0);
+
+      await service.getSkins({ minPriceRub: 500 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            priceRub: { gte: new Prisma.Decimal('500') },
+          }),
+        }),
+      );
+    });
+
+    it('should filter by maxPriceRub only', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(0);
+
+      await service.getSkins({ maxPriceRub: 2000 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            priceRub: { lte: new Prisma.Decimal('2000') },
+          }),
+        }),
+      );
+    });
+
+    it('should filter by both minPriceRub and maxPriceRub', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ minPriceRub: 500, maxPriceRub: 2000 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            priceRub: {
+              gte: new Prisma.Decimal('500'),
+              lte: new Prisma.Decimal('2000'),
+            },
+          }),
+        }),
+      );
+    });
+
+    it('should not include priceRub filter when no price params given', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ page: 1, limit: 10 });
+
+      const call = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
+      expect(call.where).not.toHaveProperty('priceRub');
+    });
+
+    it('should pass correct skip and take for pagination', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(0);
+
+      await service.getSkins({ page: 3, limit: 10 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 10 }),
+      );
+    });
+
+    it('should add OR filter for name and marketHashName when search is provided', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ search: 'redline' });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            OR: [
+              { name: { contains: 'redline', mode: 'insensitive' } },
+              { marketHashName: { contains: 'redline', mode: 'insensitive' } },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('should not add OR filter when search is an empty string', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ search: '' });
+
+      const call = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
+      expect(call.where).not.toHaveProperty('OR');
+    });
+
+    it('should not add OR filter when search is whitespace only', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ search: '   ' });
+
+      const call = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
+      expect(call.where).not.toHaveProperty('OR');
+    });
+
+    it('should trim search before applying it', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ search: '  ak-47  ' });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [
+              { name: { contains: 'ak-47', mode: 'insensitive' } },
+              { marketHashName: { contains: 'ak-47', mode: 'insensitive' } },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('should combine search with min and max price filters', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(1);
+
+      await service.getSkins({ search: 'ak', minPriceRub: 500, maxPriceRub: 2000 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            OR: [
+              { name: { contains: 'ak', mode: 'insensitive' } },
+              { marketHashName: { contains: 'ak', mode: 'insensitive' } },
+            ],
+            priceRub: {
+              gte: new Prisma.Decimal('500'),
+              lte: new Prisma.Decimal('2000'),
+            },
+          }),
+        }),
+      );
+    });
   });
 
   describe('buySkin', () => {

@@ -48,10 +48,11 @@ export class InventoryService {
       isActive: true,
     };
 
-    if (query.search) {
+    const search = query.search?.trim().slice(0, 100);
+    if (search) {
       where.OR = [
-        { name: { contains: query.search, mode: 'insensitive' } },
-        { marketHashName: { contains: query.search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+        { marketHashName: { contains: search, mode: 'insensitive' } },
       ];
     }
 
