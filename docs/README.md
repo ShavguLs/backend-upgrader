@@ -50,6 +50,7 @@ Steam strategy construction requires `STEAM_RETURN_URL`, `STEAM_REALM`, and `STE
 | `POST` | `/inventory/withdraw` | Yes | Withdraw an owned item as a real Waxpeer skin |
 | `GET` | `/upgrader/options` | Yes | List target skins for a chance tier and source item |
 | `POST` | `/upgrader/attempt` | Yes | Risk an inventory item to win a higher-priced skin |
+| `GET` | `/upgrader/history` | Yes | List paginated upgrader attempt history |
 | `GET` | `/wallet` | Yes | Get wallet and recent deposits |
 | `POST` | `/wallet/deposits` | Yes | Create Plisio deposit invoice |
 | `POST` | `/wallet/plisio/callback` | No | Plisio payment callback |

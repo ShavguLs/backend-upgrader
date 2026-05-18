@@ -36,6 +36,7 @@ Important variables:
 | `SKIN_SELLBACK_PERCENT` | No | Sellback percent from `0` to `100`. Defaults to `90`. |
 | `SKIN_PROVIDER` | No | Set to `WAXPEER`/`waxpeer` to run skin sync on bootstrap; any other value skips sync. |
 | `SKIN_PRICE_MARKUP_PERCENT` | No | Markup applied to synced provider prices. Must be `>= 0`. |
+| `SKIN_MIN_PRICE_RUB` | No | Server-side minimum RUB price for the public catalog, buying, upgrader, and Waxpeer sync. Must be `>= 0`. Defaults to `10`. |
 | `SKIN_SYNC_INTERVAL_SECONDS` | No | Waxpeer sync interval. Defaults to `300`. |
 | `SKIN_STALE_AFTER_MINUTES` | No | Marks old provider rows inactive after this age. Defaults to `30`. |
 | `WAXPEER_API_BASE_URL` | No | Waxpeer API origin. Defaults to `https://api.waxpeer.com`. |
@@ -78,6 +79,6 @@ The backend defaults to `PORT=3000`; the frontend dev server is configured for `
 
 ## Skin Catalog Sync
 
-`SkinsModule` starts Waxpeer sync during application bootstrap only when `SKIN_PROVIDER` lowercases to `waxpeer`. The sync fetches USD prices, converts through `FxRateService`, applies `SKIN_PRICE_MARKUP_PERCENT`, upserts `Skin` rows, and marks stale provider rows inactive.
+`SkinsModule` starts Waxpeer sync during application bootstrap only when `SKIN_PROVIDER` lowercases to `waxpeer`. The sync fetches USD prices, converts through `FxRateService`, applies `SKIN_PRICE_MARKUP_PERCENT`, upserts `Skin` rows, and marks stale provider rows inactive. Provider items whose converted RUB price falls below `SKIN_MIN_PRICE_RUB` (default `10`) are skipped, and already-stored active provider rows below the minimum are marked inactive at the end of each sync.
 
 For purely local catalog testing without Waxpeer, leave `SKIN_PROVIDER` unset or non-`waxpeer` and run `npm run prisma:seed`.

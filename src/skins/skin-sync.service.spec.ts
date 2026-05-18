@@ -84,9 +84,11 @@ describe('SkinSyncService', () => {
     );
   });
 
-  it('marks stale waxpeer rows inactive after a successful sync', async () => {
+  it('marks stale and under-min waxpeer rows inactive after a successful sync', async () => {
     (fxRate.getUsdToRubRate as jest.Mock).mockResolvedValue(90);
-    prisma.skin.updateMany.mockResolvedValue({ count: 3 });
+    prisma.skin.updateMany
+      .mockResolvedValueOnce({ count: 3 })
+      .mockResolvedValueOnce({ count: 2 });
 
     const provider: SkinProvider = {
       getName: () => 'waxpeer',
@@ -96,10 +98,20 @@ describe('SkinSyncService', () => {
     const service = buildService();
     const result = await service.syncOnce(provider);
 
-    expect(result.inactivated).toBe(3);
-    const whereArg = prisma.skin.updateMany.mock.calls[0][0].where;
-    expect(whereArg.provider).toBe('waxpeer');
-    expect(whereArg.isActive).toBe(true);
+    expect(result.inactivated).toBe(5);
+    expect(prisma.skin.updateMany).toHaveBeenCalledTimes(2);
+
+    const staleWhere = prisma.skin.updateMany.mock.calls[0][0].where;
+    expect(staleWhere.provider).toBe('waxpeer');
+    expect(staleWhere.isActive).toBe(true);
+    expect(staleWhere.OR).toBeDefined();
+
+    const belowMinWhere = prisma.skin.updateMany.mock.calls[1][0].where;
+    expect(belowMinWhere.provider).toBe('waxpeer');
+    expect(belowMinWhere.isActive).toBe(true);
+    expect(belowMinWhere.priceRub).toEqual({
+      lt: new Prisma.Decimal('10'),
+    });
   });
 
   it('does not mark stale rows inactive when provider fetch fails', async () => {
@@ -132,6 +144,82 @@ describe('SkinSyncService', () => {
 
     expect(provider.getCatalog).not.toHaveBeenCalled();
     expect(prisma.skin.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('skips converted RUB prices below the configured minimum', async () => {
+    (fxRate.getUsdToRubRate as jest.Mock).mockResolvedValue(90);
+    // 0.05 USD * 90 * 1.08 = 4.86 RUB which is below default 10 RUB minimum.
+    const provider: SkinProvider = {
+      getName: () => 'waxpeer',
+      getCatalog: async () => [
+        {
+          marketHashName: 'Cheap | Sticker (Factory New)',
+          providerPriceUsd: '0.05',
+          imageUrl: 'https://x/c.webp',
+          rawData: {},
+        },
+      ],
+    };
+
+    const service = buildService();
+    const result = await service.syncOnce(provider);
+
+    expect(result.synced).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(prisma.skin.upsert).not.toHaveBeenCalled();
+  });
+
+  it('upserts converted RUB prices equal to the configured minimum', async () => {
+    (fxRate.getUsdToRubRate as jest.Mock).mockResolvedValue(100);
+    process.env.SKIN_PRICE_MARKUP_PERCENT = '0';
+    // 0.10 USD * 100 = 10.00 RUB, equal to minimum.
+    const provider: SkinProvider = {
+      getName: () => 'waxpeer',
+      getCatalog: async () => [
+        {
+          marketHashName: 'Edge | Skin (Factory New)',
+          providerPriceUsd: '0.10',
+          imageUrl: 'https://x/e.webp',
+          rawData: {},
+        },
+      ],
+    };
+
+    const service = buildService();
+    const result = await service.syncOnce(provider);
+
+    expect(result.synced).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(prisma.skin.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects custom SKIN_MIN_PRICE_RUB when skipping under-min items', async () => {
+    (fxRate.getUsdToRubRate as jest.Mock).mockResolvedValue(90);
+    process.env.SKIN_MIN_PRICE_RUB = '500';
+    // 1 USD * 90 * 1.08 = 97.20 RUB, below 500 minimum.
+    const provider: SkinProvider = {
+      getName: () => 'waxpeer',
+      getCatalog: async () => [
+        {
+          marketHashName: 'Below | Custom (Factory New)',
+          providerPriceUsd: '1.0',
+          imageUrl: 'https://x/b.webp',
+          rawData: {},
+        },
+      ],
+    };
+
+    const service = buildService();
+    const result = await service.syncOnce(provider);
+
+    expect(result.synced).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(prisma.skin.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid SKIN_MIN_PRICE_RUB at construction time', () => {
+    process.env.SKIN_MIN_PRICE_RUB = '-1';
+    expect(() => buildService()).toThrow('SKIN_MIN_PRICE_RUB must be >= 0');
   });
 
   it('skips items with invalid provider price but keeps syncing others', async () => {

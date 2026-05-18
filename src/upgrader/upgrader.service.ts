@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUpgradeAttemptDto } from './dto/create-upgrade-attempt.dto';
+import { ListUpgradeHistoryDto } from './dto/list-upgrade-history.dto';
 import {
   ListUpgradeOptionsDto,
   UPGRADE_CHANCE_TIERS,
@@ -80,6 +81,14 @@ export class UpgraderService {
     return value;
   })();
 
+  private readonly minPriceRub = (() => {
+    const value = new Prisma.Decimal(process.env.SKIN_MIN_PRICE_RUB || '10');
+    if (value.lt(0)) {
+      throw new Error('SKIN_MIN_PRICE_RUB must be >= 0');
+    }
+    return value;
+  })();
+
   constructor(private readonly prisma: PrismaService) {
     if (this.minDisplayedChancePercent.gte(this.maxDisplayedChancePercent)) {
       throw new Error(
@@ -99,21 +108,34 @@ export class UpgraderService {
     const sourceValueRub = sourceItem.sellPriceRub;
     const displayedChancePercent = new Prisma.Decimal(query.chance);
     this.validateDisplayedChance(displayedChancePercent);
-    const targetPriceRub = sourceValueRub
+
+    const idealReceivedValueRub = sourceValueRub
       .mul(HUNDRED)
       .div(displayedChancePercent)
       .toDecimalPlaces(2);
-
-    const upperBound = targetPriceRub
+    const upperReceivedValueRub = idealReceivedValueRub
       .mul(new Prisma.Decimal(1).plus(this.targetPriceTolerancePercent.div(100)))
       .toDecimalPlaces(2);
+
+    const rawLowerPriceRub = idealReceivedValueRub
+      .mul(HUNDRED)
+      .div(this.sellbackPercent)
+      .toDecimalPlaces(2);
+    const rawUpperPriceRub = upperReceivedValueRub
+      .mul(HUNDRED)
+      .div(this.sellbackPercent)
+      .toDecimalPlaces(2);
+
+    const effectiveLowerBound = rawLowerPriceRub.gt(this.minPriceRub)
+      ? rawLowerPriceRub
+      : this.minPriceRub;
 
     const candidates = await this.prisma.skin.findMany({
       where: {
         isActive: true,
         priceRub: {
-          gte: targetPriceRub,
-          lte: upperBound,
+          gte: effectiveLowerBound,
+          lte: rawUpperPriceRub,
         },
       },
       select: this.publicSkinSelect,
@@ -122,10 +144,14 @@ export class UpgraderService {
     });
 
     const sorted = candidates
-      .map((skin) => ({
-        skin,
-        distance: skin.priceRub.minus(targetPriceRub).abs(),
-      }))
+      .map((skin) => {
+        const receivedValueRub = this.toReceivedValueRub(skin.priceRub);
+        return {
+          skin,
+          receivedValueRub,
+          distance: receivedValueRub.minus(idealReceivedValueRub).abs(),
+        };
+      })
       .sort((a, b) => {
         const diff = a.distance.cmp(b.distance);
         if (diff !== 0) return diff;
@@ -134,12 +160,15 @@ export class UpgraderService {
         return a.skin.id - b.skin.id;
       })
       .slice(0, 24)
-      .map((entry) => entry.skin);
+      .map((entry) => ({
+        ...entry.skin,
+        receivedValueRub: entry.receivedValueRub.toFixed(2),
+      }));
 
     return {
       sourceValueRub: sourceValueRub.toFixed(2),
       displayedChancePercent: displayedChancePercent.toFixed(4),
-      targetPriceRub: targetPriceRub.toFixed(2),
+      targetValueRub: idealReceivedValueRub.toFixed(2),
       items: sorted,
     };
   }
@@ -161,25 +190,30 @@ export class UpgraderService {
     if (!targetSkin || !targetSkin.isActive) {
       throw new BadRequestException('Target skin not found');
     }
+    if (targetSkin.priceRub.lt(this.minPriceRub)) {
+      throw new BadRequestException('Target skin not found');
+    }
 
     const sourceValueRub = sourceItem.sellPriceRub;
     const displayedChancePercent = new Prisma.Decimal(dto.chance);
     this.validateDisplayedChance(displayedChancePercent);
 
-    const idealTargetPriceRub = sourceValueRub
+    const idealReceivedValueRub = sourceValueRub
       .mul(HUNDRED)
       .div(displayedChancePercent)
       .toDecimalPlaces(2);
-    const upperBoundPriceRub = idealTargetPriceRub
+    const upperReceivedValueRub = idealReceivedValueRub
       .mul(new Prisma.Decimal(1).plus(this.targetPriceTolerancePercent.div(100)))
       .toDecimalPlaces(2);
 
-    if (targetSkin.priceRub.lt(idealTargetPriceRub)) {
+    const targetReceivedValueRub = this.toReceivedValueRub(targetSkin.priceRub);
+
+    if (targetReceivedValueRub.lt(idealReceivedValueRub)) {
       throw new BadRequestException(
         'Target skin price is too low for the selected chance',
       );
     }
-    if (targetSkin.priceRub.gt(upperBoundPriceRub)) {
+    if (targetReceivedValueRub.gt(upperReceivedValueRub)) {
       throw new BadRequestException(
         'Target skin price is too high for the selected chance',
       );
@@ -195,10 +229,7 @@ export class UpgraderService {
       .toDecimalPlaces(4);
     const isWin = rollPercent.lte(effectiveChancePercent);
 
-    const targetSellPriceRub = targetSkin.priceRub
-      .mul(this.sellbackPercent)
-      .div(100)
-      .toDecimalPlaces(2);
+    const targetSellPriceRub = targetReceivedValueRub;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const claim = await tx.inventoryItem.updateMany({
@@ -212,6 +243,9 @@ export class UpgraderService {
       const attemptMetadata: Prisma.InputJsonValue = {
         houseEdgePercent: this.houseEdgePercent.toFixed(4),
         sourceSkinId: sourceItem.skinId,
+        targetPriceRub: targetSkin.priceRub.toFixed(2),
+        targetReceivedValueRub: targetReceivedValueRub.toFixed(2),
+        sellbackPercent: this.sellbackPercent.toFixed(4),
       };
 
       const attempt = await tx.upgradeAttempt.create({
@@ -252,6 +286,7 @@ export class UpgraderService {
           displayedChancePercent: displayedChancePercent.toFixed(4),
           sourceValueRub: sourceValueRub.toFixed(2),
           targetPriceRub: targetSkin.priceRub.toFixed(2),
+          targetReceivedValueRub: targetReceivedValueRub.toFixed(2),
           skinMarketHashName: targetSkin.marketHashName,
         };
 
@@ -323,6 +358,7 @@ export class UpgraderService {
     return {
       result: isWin ? 'win' : 'loss',
       displayedChancePercent: displayedChancePercent.toFixed(4),
+      targetReceivedValueRub: targetReceivedValueRub.toFixed(2),
       sourceItem: result.sourceItem,
       wonItem: result.wonItem,
       targetSkin: this.pickPublicSkinFields(targetSkin),
@@ -332,6 +368,71 @@ export class UpgraderService {
         createdAt: result.attempt.createdAt,
       },
     };
+  }
+
+  async listHistory(userId: number, query: ListUpgradeHistoryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.upgradeAttempt.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          result: true,
+          displayedChancePercent: true,
+          sourceValueRub: true,
+          targetPriceRub: true,
+          createdAt: true,
+          sourceInventoryItem: {
+            select: {
+              id: true,
+              status: true,
+              skin: { select: this.publicSkinSelect },
+            },
+          },
+          targetSkin: { select: this.publicSkinSelect },
+          wonInventoryItem: {
+            select: {
+              id: true,
+              status: true,
+              skin: { select: this.publicSkinSelect },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.upgradeAttempt.count({ where: { userId } }),
+    ]);
+
+    return {
+      items: items.map((attempt) => ({
+        id: attempt.id,
+        result: attempt.result,
+        displayedChancePercent: attempt.displayedChancePercent.toFixed(4),
+        sourceValueRub: attempt.sourceValueRub.toFixed(2),
+        targetPriceRub: attempt.targetPriceRub.toFixed(2),
+        createdAt: attempt.createdAt,
+        sourceItem: attempt.sourceInventoryItem,
+        targetSkin: attempt.targetSkin,
+        wonItem: attempt.wonInventoryItem,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  private toReceivedValueRub(rawPriceRub: Prisma.Decimal): Prisma.Decimal {
+    return rawPriceRub
+      .mul(this.sellbackPercent)
+      .div(HUNDRED)
+      .toDecimalPlaces(2);
   }
 
   private validateDisplayedChance(displayedChancePercent: Prisma.Decimal) {

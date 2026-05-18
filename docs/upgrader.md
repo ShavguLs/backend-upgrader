@@ -10,26 +10,50 @@ is added to the user's inventory.
 The upgrade input value is the source item's `sellPriceRub`, not its
 `purchasePriceRub` or the current catalog price.
 
+## Target Received Value
+
+The user-visible target value is the post-win inventory `sellPriceRub`,
+not the raw catalog `Skin.priceRub`. When the upgrade is won, the new
+`InventoryItem.sellPriceRub` is set to:
+
+```text
+targetReceivedValueRub = targetSkin.priceRub * SKIN_SELLBACK_PERCENT / 100
+```
+
+This keeps upgraded skins consistent with bought skins: both have a
+sellback margin applied when entering inventory. The raw catalog price
+remains visible as `Skin.priceRub` but the upgrader's chance math, target
+window, and user-facing value are all expressed in received-value space.
+
 ## Chance Tiers
 
 The frontend offers fixed displayed chance tiers `10%`, `25%`, `50%`, and
 `75%`. The user-selected tier is the source of truth for the displayed
 chance — the backend does **not** derive the chance from the chosen target
-skin's price. The ideal target price for a tier is calculated as:
+skin's price. The ideal target received value for a tier is calculated as:
 
 ```text
-idealTargetPriceRub = sourceValueRub / (displayedChancePercent / 100)
+idealReceivedValueRub = sourceValueRub / (displayedChancePercent / 100)
 ```
 
-The target skin's `priceRub` must fall in the one-sided window:
+The target skin's received value must fall in the one-sided window:
 
 ```text
-idealTargetPriceRub <= targetSkin.priceRub <= idealTargetPriceRub * (1 + UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT / 100)
+idealReceivedValueRub <= targetReceivedValueRub <= idealReceivedValueRub * (1 + UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT / 100)
 ```
 
 The window is one-sided upward on purpose: a cheaper-than-ideal target
 would silently raise the true chance above the displayed tier and shrink
 the house edge.
+
+Internally `listOptions` converts the received-value bounds back into raw
+`Skin.priceRub` bounds before querying, keeping the existing
+`[isActive, priceRub]` index efficient:
+
+```text
+rawLowerPriceRub = idealReceivedValueRub / (SKIN_SELLBACK_PERCENT / 100)
+rawUpperPriceRub = upperReceivedValueRub / (SKIN_SELLBACK_PERCENT / 100)
+```
 
 ## Hidden House Edge
 
@@ -75,21 +99,30 @@ Required.
 {
   "sourceValueRub": "900.00",
   "displayedChancePercent": "50.0000",
-  "targetPriceRub": "1800.00",
+  "targetValueRub": "1800.00",
   "items": [
     {
       "id": 20,
       "marketHashName": "AWP | Asiimov (Field-Tested)",
-      "priceRub": "1800.00",
+      "priceRub": "2000.00",
+      "receivedValueRub": "1800.00",
       "isActive": true
     }
   ]
 }
 ```
 
-`items` returns at most 24 active skins with `priceRub` in
-`[idealTargetPriceRub, idealTargetPriceRub * (1 + UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT / 100)]`,
-sorted by distance to the ideal target price.
+`targetValueRub` is the ideal received value for the selected chance tier
+(equal to each candidate's post-win `sellPriceRub` when the candidate's
+received value matches the tier exactly). `receivedValueRub` on each item
+is `priceRub * SKIN_SELLBACK_PERCENT / 100`, rounded to 2 decimal places.
+
+`items` returns at most 24 active skins with raw `priceRub` in
+`[max(rawLowerPriceRub, SKIN_MIN_PRICE_RUB), rawUpperPriceRub]`, sorted by
+distance from `idealReceivedValueRub` (in received-value space). The
+server minimum price (`SKIN_MIN_PRICE_RUB`, default `10`) raises the lower
+bound when the raw bound for a very cheap source item would otherwise
+fall below it.
 
 ### Errors
 
@@ -131,6 +164,7 @@ Required.
 {
   "result": "win",
   "displayedChancePercent": "50.0000",
+  "targetReceivedValueRub": "1800.00",
   "sourceItem": {
     "id": 10,
     "status": "upgraded_used"
@@ -151,6 +185,10 @@ Required.
   }
 }
 ```
+
+`targetReceivedValueRub` is the value the user actually receives in their
+inventory on a win — equal to the new `wonItem.sellPriceRub`. The raw
+catalog price remains available as `targetSkin.priceRub`.
 
 On loss, `wonItem` is `null` and `result` is `"loss"`.
 
@@ -178,5 +216,74 @@ more `InventoryTransaction` rows:
 
 | Status | Reason |
 | --- | --- |
-| `400` | Invalid body, inventory item not found or not owned, target skin not found or inactive, target skin price below the ideal for the selected chance, target skin price above the upper tolerance bound, displayed chance outside configured min/max, or item not available for upgrade (double-spend protection). |
+| `400` | Invalid body, inventory item not found or not owned, target skin not found, inactive, or below `SKIN_MIN_PRICE_RUB`, target received value below the ideal for the selected chance, target received value above the upper tolerance bound, displayed chance outside configured min/max, or item not available for upgrade (double-spend protection). |
+| `401` | Not authenticated. |
+
+## `GET /upgrader/history`
+
+Lists the authenticated user's upgrade attempts, newest first, in pages.
+
+### Auth
+
+Required.
+
+### Query
+
+| Name | Type | Required | Validation |
+| --- | --- | --- | --- |
+| `page` | integer | No | Default `1`. Minimum `1`. |
+| `limit` | integer | No | Default `20`. Minimum `1`, maximum `100`. |
+
+### Response
+
+```json
+{
+  "items": [
+    {
+      "id": 99,
+      "result": "win",
+      "displayedChancePercent": "50.0000",
+      "sourceValueRub": "900.00",
+      "targetPriceRub": "1800.00",
+      "createdAt": "2026-05-17T10:00:00.000Z",
+      "sourceItem": {
+        "id": 10,
+        "status": "upgraded_used",
+        "skin": { "id": 1, "name": "AK-47 | Redline" }
+      },
+      "targetSkin": { "id": 20, "name": "AWP | Asiimov" },
+      "wonItem": {
+        "id": 500,
+        "status": "owned",
+        "skin": { "id": 20, "name": "AWP | Asiimov" }
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 145,
+    "totalPages": 8
+  }
+}
+```
+
+On loss, `wonItem` is `null`.
+
+### Hidden Fields
+
+The following audit fields are intentionally excluded from this endpoint:
+
+- `effectiveChancePercent`
+- `houseEdgePercent`
+- `rollPercent`
+- Raw `metadata`
+
+Only attempts where `userId` equals the authenticated user are returned.
+
+### Errors
+
+| Status | Reason |
+| --- | --- |
+| `400` | Invalid query (e.g. `page` or `limit` out of range). |
 | `401` | Not authenticated. |

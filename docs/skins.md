@@ -4,6 +4,16 @@ Skin catalog endpoints are public, only return active skins, and are implemented
 
 Catalog data can come from `npm run prisma:seed` or from the Waxpeer bootstrap sync when `SKIN_PROVIDER=WAXPEER`/`waxpeer`.
 
+## Server Minimum Price
+
+Public skin endpoints only expose active skins priced at or above `SKIN_MIN_PRICE_RUB`. The default is `10 RUB`. Set the env var to a different non-negative value to override; values below `0` are rejected at startup.
+
+- `GET /skins` always applies `priceRub >= SKIN_MIN_PRICE_RUB`. If the caller passes `minPriceRub`, the effective minimum is the higher of `minPriceRub` and `SKIN_MIN_PRICE_RUB` — `minPriceRub` can raise the floor but never lower it.
+- `GET /skins/:id` returns `404` for under-minimum skins, even when they are still flagged active in the database.
+- Buying an under-minimum skin id is rejected with `400`.
+- Upgrader options and attempts also reject under-minimum target skins (see `upgrader.md`).
+- Waxpeer sync skips provider items whose converted RUB price is below the minimum and marks already-stored active provider rows below the minimum inactive.
+
 ## `GET /skins`
 
 Lists skins with filtering and pagination.
@@ -20,7 +30,7 @@ Not required.
 | `weapon` | string | No | Exact weapon filter. |
 | `rarity` | string | No | Exact rarity filter. |
 | `exterior` | string | No | Exact exterior filter. |
-| `minPriceRub` | number | No | Minimum RUB price, inclusive. |
+| `minPriceRub` | number | No | Minimum RUB price, inclusive. Cannot lower the server minimum (`SKIN_MIN_PRICE_RUB`, default `10`). |
 | `maxPriceRub` | number | No | Maximum RUB price, inclusive. |
 | `page` | integer | No | Page number. Minimum `1`. Default `1`. |
 | `limit` | integer | No | Items per page. Minimum `1`, maximum `100`, default `24`. |

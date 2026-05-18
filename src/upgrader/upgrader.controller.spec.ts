@@ -18,6 +18,7 @@ describe('UpgraderController', () => {
           useValue: {
             listOptions: jest.fn(),
             createAttempt: jest.fn(),
+            listHistory: jest.fn(),
           },
         },
       ],
@@ -40,7 +41,7 @@ describe('UpgraderController', () => {
     const response = {
       sourceValueRub: '900.00',
       displayedChancePercent: '50.0000',
-      targetPriceRub: '1800.00',
+      targetValueRub: '1800.00',
       items: [],
     };
     (service.listOptions as jest.Mock).mockResolvedValue(response);
@@ -55,6 +56,7 @@ describe('UpgraderController', () => {
     const response = {
       result: 'win',
       displayedChancePercent: '50.0000',
+      targetReceivedValueRub: '1800.00',
       sourceItem: { id: 10 },
       wonItem: { id: 500 },
       targetSkin: { id: 20 },
@@ -64,5 +66,18 @@ describe('UpgraderController', () => {
 
     await expect(controller.createAttempt(req, dto)).resolves.toEqual(response);
     expect(service.createAttempt).toHaveBeenCalledWith(123, dto);
+  });
+
+  it('uses authenticated user id for listHistory and delegates to service', async () => {
+    const req = { user: { id: 123 } } as unknown as Request;
+    const query = { page: 2, limit: 10 };
+    const response = {
+      items: [],
+      pagination: { page: 2, limit: 10, total: 0, totalPages: 0 },
+    };
+    (service.listHistory as jest.Mock).mockResolvedValue(response);
+
+    await expect(controller.listHistory(req, query)).resolves.toEqual(response);
+    expect(service.listHistory).toHaveBeenCalledWith(123, query);
   });
 });

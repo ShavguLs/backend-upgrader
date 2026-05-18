@@ -183,7 +183,7 @@ describe('InventoryService', () => {
       );
     });
 
-    it('should filter by maxPriceRub only', async () => {
+    it('should filter by maxPriceRub only and still apply server minimum gte', async () => {
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
       (prisma.skin.count as jest.Mock).mockResolvedValue(0);
 
@@ -193,7 +193,10 @@ describe('InventoryService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             isActive: true,
-            priceRub: { lte: new Prisma.Decimal('2000') },
+            priceRub: {
+              gte: new Prisma.Decimal('10'),
+              lte: new Prisma.Decimal('2000'),
+            },
           }),
         }),
       );
@@ -218,14 +221,46 @@ describe('InventoryService', () => {
       );
     });
 
-    it('should not include priceRub filter when no price params given', async () => {
+    it('should apply server minimum gte when no price params given', async () => {
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([activeSkin]);
       (prisma.skin.count as jest.Mock).mockResolvedValue(1);
 
       await service.getSkins({ page: 1, limit: 10 });
 
       const call = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
-      expect(call.where).not.toHaveProperty('priceRub');
+      expect(call.where.priceRub).toEqual({ gte: new Prisma.Decimal('10') });
+    });
+
+    it('should clamp user minPriceRub below the server minimum up to the server minimum', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(0);
+
+      await service.getSkins({ minPriceRub: 5 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            priceRub: { gte: new Prisma.Decimal('10') },
+          }),
+        }),
+      );
+    });
+
+    it('should keep user minPriceRub when it is higher than the server minimum', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.skin.count as jest.Mock).mockResolvedValue(0);
+
+      await service.getSkins({ minPriceRub: 25 });
+
+      expect(prisma.skin.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            priceRub: { gte: new Prisma.Decimal('25') },
+          }),
+        }),
+      );
     });
 
     it('should pass correct skip and take for pagination', async () => {
@@ -320,12 +355,44 @@ describe('InventoryService', () => {
     });
   });
 
+  describe('getSkin', () => {
+    it('returns the skin when active and at or above the server minimum', async () => {
+      (prisma.skin.findUnique as jest.Mock).mockResolvedValue(activeSkin);
+
+      const result = await service.getSkin(1);
+      expect(result).toEqual(activeSkin);
+    });
+
+    it('rejects under-minimum active skins with 404', async () => {
+      (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
+        ...activeSkin,
+        priceRub: new Prisma.Decimal('5.00'),
+      });
+
+      await expect(service.getSkin(1)).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('buySkin', () => {
     it('should reject missing skin', async () => {
       (prisma.skin.findUnique as jest.Mock).mockResolvedValue(null);
 
       await expect(service.buySkin(123, { skinId: 1 })).rejects.toThrow(
         NotFoundException,
+      );
+      expect(prisma.wallet.update).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+      expect(prisma.inventoryTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject under-minimum active skins', async () => {
+      (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
+        ...activeSkin,
+        priceRub: new Prisma.Decimal('5.00'),
+      });
+
+      await expect(service.buySkin(123, { skinId: 1 })).rejects.toThrow(
+        BadRequestException,
       );
       expect(prisma.wallet.update).not.toHaveBeenCalled();
       expect(prisma.inventoryItem.create).not.toHaveBeenCalled();

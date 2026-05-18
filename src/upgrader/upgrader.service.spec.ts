@@ -41,7 +41,7 @@ describe('UpgraderService', () => {
     rarity: 'Covert',
     exterior: 'Field-Tested',
     imageUrl: null,
-    priceRub: new Prisma.Decimal('1800.00'),
+    priceRub: new Prisma.Decimal('2000.00'),
     provider: 'waxpeer',
     providerItemId: 'awp-asiimov-ft',
     lastSyncedAt: null,
@@ -72,6 +72,8 @@ describe('UpgraderService', () => {
               create: jest.fn(),
               update: jest.fn(),
               findUnique: jest.fn(),
+              findMany: jest.fn(),
+              count: jest.fn(),
             },
             inventoryTransaction: {
               create: jest.fn(),
@@ -172,15 +174,15 @@ describe('UpgraderService', () => {
       expect(prisma.skin.findMany).not.toHaveBeenCalled();
     });
 
-    it('uses sellPriceRub to compute target price and returns higher-priced skins around it', async () => {
+    it('uses sellPriceRub to compute target value and returns skins around the raw price bound', async () => {
       (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([
-        { ...targetSkin, id: 20, priceRub: new Prisma.Decimal('1800.00') },
-        { ...targetSkin, id: 21, priceRub: new Prisma.Decimal('1850.00') },
-        { ...targetSkin, id: 22, priceRub: new Prisma.Decimal('1700.00') },
+        { ...targetSkin, id: 20, priceRub: new Prisma.Decimal('2000.00') },
+        { ...targetSkin, id: 21, priceRub: new Prisma.Decimal('2050.00') },
+        { ...targetSkin, id: 22, priceRub: new Prisma.Decimal('2100.00') },
       ]);
 
-      const result = await service.listOptions(123, {
+      const result: any = await service.listOptions(123, {
         inventoryItemId: 10,
         chance: 50,
       });
@@ -188,16 +190,21 @@ describe('UpgraderService', () => {
       expect(prisma.inventoryItem.findFirst).toHaveBeenCalledWith({
         where: { id: 10, userId: 123, status: 'owned' },
       });
-      // 900 / (50/100) = 1800
-      expect(result.targetPriceRub).toBe('1800.00');
+      // ideal received = 900 / (50/100) = 1800
+      expect(result.targetValueRub).toBe('1800.00');
+      expect(result).not.toHaveProperty('targetPriceRub');
       expect(result.sourceValueRub).toBe('900.00');
       expect(result.displayedChancePercent).toBe('50.0000');
       expect(result.items.map((s: any) => s.id)).toEqual([20, 21, 22]);
+      // received = raw * 0.9
+      expect(result.items[0].receivedValueRub).toBe('1800.00');
+      expect(result.items[1].receivedValueRub).toBe('1845.00');
+      expect(result.items[2].receivedValueRub).toBe('1890.00');
 
       const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
-      // 900 / (50/100) = 1800 ideal target; one-sided tolerance only upward.
+      // rawLower = 1800 / 0.9 = 2000; one-sided tolerance only upward.
       expect(findManyCall.where.priceRub.gte).toEqual(
-        new Prisma.Decimal('1800.00'),
+        new Prisma.Decimal('2000.00'),
       );
       expect(findManyCall.where.priceRub).not.toHaveProperty('gt');
       expect(findManyCall.where.isActive).toBe(true);
@@ -247,17 +254,41 @@ describe('UpgraderService', () => {
       }
     });
 
-    it('uses correct target price for 25% tier', async () => {
+    it('uses correct target value for 25% tier', async () => {
       (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.listOptions(123, {
+      const result: any = await service.listOptions(123, {
         inventoryItemId: 10,
         chance: 25,
       });
 
-      // 900 / (25/100) = 3600
-      expect(result.targetPriceRub).toBe('3600.00');
+      // ideal received = 900 / (25/100) = 3600
+      expect(result.targetValueRub).toBe('3600.00');
+      // rawLower = 3600 / 0.9 = 4000
+      const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
+      expect(findManyCall.where.priceRub.gte).toEqual(
+        new Prisma.Decimal('4000.00'),
+      );
+    });
+
+    it('applies the configured minimum lower bound when calculated target price is lower', async () => {
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue({
+        ...ownedItem,
+        sellPriceRub: new Prisma.Decimal('3.00'),
+      });
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
+
+      await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 75,
+      });
+
+      // ideal target = 3 / 0.75 = 4.00 which is below default 10 minimum.
+      const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
+      expect(findManyCall.where.priceRub.gte).toEqual(
+        new Prisma.Decimal('10'),
+      );
     });
   });
 
@@ -365,6 +396,28 @@ describe('UpgraderService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects when target skin is below the configured minimum', async () => {
+      // source sellPrice 3, chance 75 => ideal 4.00 with upper bound 4.60.
+      // target priced 4.00 satisfies the range checks but is below min 10.
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue({
+        ...ownedItem,
+        sellPriceRub: new Prisma.Decimal('3.00'),
+      });
+      (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
+        ...targetSkin,
+        priceRub: new Prisma.Decimal('4.00'),
+      });
+
+      await expect(
+        service.createAttempt(123, {
+          inventoryItemId: 10,
+          targetSkinId: 20,
+          chance: 75,
+        }),
+      ).rejects.toThrow('Target skin not found');
+      expect(prisma.inventoryItem.updateMany).not.toHaveBeenCalled();
+    });
+
     it('rejects when target price is below the selected chance ideal', async () => {
       // source 900, chance 50 => ideal 1800. Anything < 1800 is rejected.
       (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(ownedItem);
@@ -382,12 +435,13 @@ describe('UpgraderService', () => {
       ).rejects.toThrow('too low for the selected chance');
     });
 
-    it('rejects when target price exceeds upper tolerance bound', async () => {
-      // source 900, chance 50 => ideal 1800; default tolerance 15% => upper 2070.
+    it('rejects when received value exceeds upper tolerance bound', async () => {
+      // source 900, chance 50 => ideal received 1800; default tolerance 15% =>
+      // upper received 2070. priceRub 2400 -> received 2160 > 2070.
       (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
         ...targetSkin,
-        priceRub: new Prisma.Decimal('2100.00'),
+        priceRub: new Prisma.Decimal('2400.00'),
       });
 
       await expect(
@@ -399,11 +453,11 @@ describe('UpgraderService', () => {
       ).rejects.toThrow('too high for the selected chance');
     });
 
-    it('accepts target priced exactly at the ideal target', async () => {
-      // 900 / 0.5 = 1800 — accept.
+    it('accepts target whose received value equals the ideal received value', async () => {
+      // ideal received = 900 / 0.5 = 1800; priceRub 2000 -> received 1800.
       setupForAttempt({
         rollBasisPoints: 100_000,
-        targetSkin: { ...targetSkin, priceRub: new Prisma.Decimal('1800.00') },
+        targetSkin: { ...targetSkin, priceRub: new Prisma.Decimal('2000.00') },
       });
 
       const response = await service.createAttempt(123, {
@@ -412,6 +466,22 @@ describe('UpgraderService', () => {
         chance: 50,
       });
       expect(response.result).toBe('win');
+    });
+
+    it('returns targetReceivedValueRub equal to the won item sellPriceRub', async () => {
+      setupForAttempt({ rollBasisPoints: 100_000 });
+
+      const response: any = await service.createAttempt(123, {
+        inventoryItemId: 10,
+        targetSkinId: 20,
+        chance: 50,
+      });
+
+      expect(response.targetReceivedValueRub).toBe('1800.00');
+      const createCall = (prisma.inventoryItem.create as jest.Mock).mock
+        .calls[0][0];
+      expect(createCall.data.sellPriceRub.toString()).toBe('1800');
+      expect(createCall.data.purchasePriceRub.toString()).toBe('2000');
     });
 
     it('marks source upgraded_used and creates won item on win', async () => {
@@ -517,6 +587,156 @@ describe('UpgraderService', () => {
       expect(response).not.toHaveProperty('effectiveChancePercent');
       expect(response).not.toHaveProperty('rollPercent');
       expect(response.displayedChancePercent).toBeDefined();
+    });
+  });
+
+  describe('listHistory', () => {
+    const sourceInventoryItem = {
+      id: 10,
+      status: 'upgraded_used',
+      skin: { id: 1, name: 'AK-47 | Redline' },
+    };
+
+    const winAttempt = {
+      id: 99,
+      sourceValueRub: new Prisma.Decimal('900.00'),
+      targetPriceRub: new Prisma.Decimal('1800.00'),
+      displayedChancePercent: new Prisma.Decimal('50'),
+      result: 'win',
+      createdAt: new Date('2026-05-17T10:00:00Z'),
+      sourceInventoryItem,
+      targetSkin: { id: 20, name: 'AWP | Asiimov' },
+      wonInventoryItem: {
+        id: 500,
+        status: 'owned',
+        skin: { id: 20, name: 'AWP | Asiimov' },
+      },
+    };
+
+    const lossAttempt = {
+      ...winAttempt,
+      id: 98,
+      wonInventoryItemId: null,
+      wonInventoryItem: null,
+      result: 'loss',
+      createdAt: new Date('2026-05-16T10:00:00Z'),
+      sourceInventoryItem: { ...sourceInventoryItem, status: 'upgraded_lost' },
+    };
+
+    it('queries by userId, orders newest-first, and paginates', async () => {
+      (prisma.upgradeAttempt.findMany as jest.Mock).mockResolvedValue([
+        winAttempt,
+      ]);
+      (prisma.upgradeAttempt.count as jest.Mock).mockResolvedValue(45);
+
+      const result = await service.listHistory(123, { page: 3, limit: 5 });
+
+      const findManyCall = (prisma.upgradeAttempt.findMany as jest.Mock).mock
+        .calls[0][0];
+      expect(findManyCall.where).toEqual({ userId: 123 });
+      expect(findManyCall.orderBy).toEqual({ createdAt: 'desc' });
+      expect(findManyCall.skip).toBe(10);
+      expect(findManyCall.take).toBe(5);
+      expect(findManyCall.select.sourceInventoryItem).toBeDefined();
+      expect(findManyCall.select.targetSkin).toBeDefined();
+      expect(findManyCall.select.wonInventoryItem).toBeDefined();
+
+      const sourceSelect = findManyCall.select.sourceInventoryItem.select;
+      expect(sourceSelect).toEqual({
+        id: true,
+        status: true,
+        skin: { select: expect.any(Object) },
+      });
+      expect(sourceSelect).not.toHaveProperty('metadata');
+      expect(sourceSelect).not.toHaveProperty('userId');
+      expect(sourceSelect).not.toHaveProperty('purchasePriceRub');
+      expect(sourceSelect).not.toHaveProperty('sellPriceRub');
+      expect(sourceSelect).not.toHaveProperty('source');
+
+      const wonSelect = findManyCall.select.wonInventoryItem.select;
+      expect(wonSelect).toEqual({
+        id: true,
+        status: true,
+        skin: { select: expect.any(Object) },
+      });
+      expect(wonSelect).not.toHaveProperty('metadata');
+      expect(wonSelect).not.toHaveProperty('userId');
+      expect(wonSelect).not.toHaveProperty('purchasePriceRub');
+      expect(wonSelect).not.toHaveProperty('sellPriceRub');
+      expect(wonSelect).not.toHaveProperty('source');
+
+      expect(findManyCall.select).not.toHaveProperty('metadata');
+      expect(findManyCall.select).not.toHaveProperty('effectiveChancePercent');
+      expect(findManyCall.select).not.toHaveProperty('houseEdgePercent');
+      expect(findManyCall.select).not.toHaveProperty('rollPercent');
+
+      const countCall = (prisma.upgradeAttempt.count as jest.Mock).mock
+        .calls[0][0];
+      expect(countCall.where).toEqual({ userId: 123 });
+
+      expect(result.pagination).toEqual({
+        page: 3,
+        limit: 5,
+        total: 45,
+        totalPages: 9,
+      });
+    });
+
+    it('applies default page=1 and limit=20 when not provided', async () => {
+      (prisma.upgradeAttempt.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.upgradeAttempt.count as jest.Mock).mockResolvedValue(0);
+
+      const result = await service.listHistory(123, {});
+
+      const findManyCall = (prisma.upgradeAttempt.findMany as jest.Mock).mock
+        .calls[0][0];
+      expect(findManyCall.skip).toBe(0);
+      expect(findManyCall.take).toBe(20);
+      expect(result.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
+    });
+
+    it('maps items including source, target, and won items without leaking hidden fields', async () => {
+      (prisma.upgradeAttempt.findMany as jest.Mock).mockResolvedValue([
+        winAttempt,
+        lossAttempt,
+      ]);
+      (prisma.upgradeAttempt.count as jest.Mock).mockResolvedValue(2);
+
+      const result = await service.listHistory(123, {});
+
+      expect(result.items).toHaveLength(2);
+
+      const [win, loss] = result.items;
+      expect(win.id).toBe(99);
+      expect(win.result).toBe('win');
+      expect(win.displayedChancePercent).toBe('50.0000');
+      expect(win.sourceValueRub).toBe('900.00');
+      expect(win.targetPriceRub).toBe('1800.00');
+      expect(win.sourceItem).toEqual(winAttempt.sourceInventoryItem);
+      expect(win.targetSkin).toEqual(winAttempt.targetSkin);
+      expect(win.wonItem).toEqual(winAttempt.wonInventoryItem);
+      expect(win).not.toHaveProperty('effectiveChancePercent');
+      expect(win).not.toHaveProperty('houseEdgePercent');
+      expect(win).not.toHaveProperty('rollPercent');
+      expect(win).not.toHaveProperty('metadata');
+
+      for (const item of [win.sourceItem, win.wonItem]) {
+        expect(item).not.toHaveProperty('metadata');
+        expect(item).not.toHaveProperty('userId');
+        expect(item).not.toHaveProperty('purchasePriceRub');
+        expect(item).not.toHaveProperty('sellPriceRub');
+        expect(item).not.toHaveProperty('source');
+        expect(item).not.toHaveProperty('createdAt');
+        expect(item).not.toHaveProperty('updatedAt');
+      }
+
+      expect(loss.result).toBe('loss');
+      expect(loss.wonItem).toBeNull();
     });
   });
 });

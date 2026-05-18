@@ -10,6 +10,7 @@ import {
 import type { Request } from 'express';
 import { AuthenticatedGuard } from '../auth/authenticated.guard';
 import { CreateUpgradeAttemptDto } from './dto/create-upgrade-attempt.dto';
+import { ListUpgradeHistoryDto } from './dto/list-upgrade-history.dto';
 import { ListUpgradeOptionsDto } from './dto/list-upgrade-options.dto';
 import { UpgraderService } from './upgrader.service';
 
@@ -28,5 +29,11 @@ export class UpgraderController {
   createAttempt(@Req() req: Request, @Body() dto: CreateUpgradeAttemptDto) {
     const user = req.user as { id: number };
     return this.upgraderService.createAttempt(user.id, dto);
+  }
+
+  @Get('history')
+  listHistory(@Req() req: Request, @Query() query: ListUpgradeHistoryDto) {
+    const user = req.user as { id: number };
+    return this.upgraderService.listHistory(user.id, query);
   }
 }

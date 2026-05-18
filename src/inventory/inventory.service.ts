@@ -57,6 +57,13 @@ export class InventoryService {
     }
     return value;
   })();
+  private readonly minPriceRub = (() => {
+    const value = new Prisma.Decimal(process.env.SKIN_MIN_PRICE_RUB || '10');
+    if (value.lt(0)) {
+      throw new Error('SKIN_MIN_PRICE_RUB must be >= 0');
+    }
+    return value;
+  })();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -88,18 +95,19 @@ export class InventoryService {
     if (query.exterior) {
       where.exterior = query.exterior;
     }
-    if (query.minPriceRub !== undefined || query.maxPriceRub !== undefined) {
-      const priceRub: Prisma.DecimalFilter = {};
-
-      if (query.minPriceRub !== undefined) {
-        priceRub.gte = new Prisma.Decimal(query.minPriceRub.toString());
-      }
-      if (query.maxPriceRub !== undefined) {
-        priceRub.lte = new Prisma.Decimal(query.maxPriceRub.toString());
-      }
-
-      where.priceRub = priceRub;
+    const priceRub: Prisma.DecimalFilter = {};
+    const requestedMin =
+      query.minPriceRub !== undefined
+        ? new Prisma.Decimal(query.minPriceRub.toString())
+        : null;
+    priceRub.gte =
+      requestedMin && requestedMin.gt(this.minPriceRub)
+        ? requestedMin
+        : this.minPriceRub;
+    if (query.maxPriceRub !== undefined) {
+      priceRub.lte = new Prisma.Decimal(query.maxPriceRub.toString());
     }
+    where.priceRub = priceRub;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.skin.findMany({
@@ -129,7 +137,7 @@ export class InventoryService {
       select: this.publicSkinSelect,
     });
 
-    if (!skin || !skin.isActive) {
+    if (!skin || !skin.isActive || skin.priceRub.lt(this.minPriceRub)) {
       throw new NotFoundException('Skin not found');
     }
 
@@ -152,6 +160,9 @@ export class InventoryService {
       }
       if (!skin.isActive) {
         throw new BadRequestException('Skin is not active');
+      }
+      if (skin.priceRub.lt(this.minPriceRub)) {
+        throw new BadRequestException('Skin is not available');
       }
 
       await tx.wallet.upsert({

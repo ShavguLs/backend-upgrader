@@ -32,6 +32,13 @@ export class SkinSyncService
     }
     return value;
   })();
+  private readonly minPriceRub = (() => {
+    const value = new Prisma.Decimal(process.env.SKIN_MIN_PRICE_RUB || '10');
+    if (value.lt(0)) {
+      throw new Error('SKIN_MIN_PRICE_RUB must be >= 0');
+    }
+    return value;
+  })();
 
   private timer: NodeJS.Timeout | null = null;
   private isSyncing = false;
@@ -124,6 +131,11 @@ export class SkinSyncService
           continue;
         }
 
+        if (priceRub.lt(this.minPriceRub)) {
+          skipped++;
+          continue;
+        }
+
         const normalized = normalizeSkin({
           marketHashName: item.marketHashName,
           category: item.category,
@@ -173,7 +185,7 @@ export class SkinSyncService
     startedAt: Date,
   ): Promise<number> {
     const threshold = new Date(startedAt.getTime() - this.staleAfterMs);
-    const result = await this.prisma.skin.updateMany({
+    const staleResult = await this.prisma.skin.updateMany({
       where: {
         provider: providerName,
         isActive: true,
@@ -181,6 +193,14 @@ export class SkinSyncService
       },
       data: { isActive: false },
     });
-    return result.count;
+    const belowMinResult = await this.prisma.skin.updateMany({
+      where: {
+        provider: providerName,
+        isActive: true,
+        priceRub: { lt: this.minPriceRub },
+      },
+      data: { isActive: false },
+    });
+    return staleResult.count + belowMinResult.count;
   }
 }
