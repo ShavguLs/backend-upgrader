@@ -477,6 +477,125 @@ describe('InventoryService', () => {
     });
   });
 
+  describe('buySkins', () => {
+    const skinA = {
+      id: 1,
+      marketHashName: 'AK-47 | Redline (Field-Tested)',
+      name: 'AK-47 | Redline',
+      priceRub: new Prisma.Decimal('600.00'),
+      isActive: true,
+    };
+    const skinB = {
+      id: 2,
+      marketHashName: 'AWP | Asiimov (Field-Tested)',
+      name: 'AWP | Asiimov',
+      priceRub: new Prisma.Decimal('400.00'),
+      isActive: true,
+    };
+
+    it('should reject empty skin ids', async () => {
+      await expect(service.buySkins(123, { skinIds: [] })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.skin.findMany).not.toHaveBeenCalled();
+    });
+
+    it('should reject duplicate skin ids', async () => {
+      await expect(
+        service.buySkins(123, { skinIds: [1, 1, 2] }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.skin.findMany).not.toHaveBeenCalled();
+    });
+
+    it('should reject when a skin is missing', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([skinA]);
+
+      await expect(
+        service.buySkins(123, { skinIds: [1, 2] }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.wallet.updateMany).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject inactive skin', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        skinA,
+        { ...skinB, isActive: false },
+      ]);
+
+      await expect(
+        service.buySkins(123, { skinIds: [1, 2] }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.wallet.updateMany).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject under-minimum skin', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        skinA,
+        { ...skinB, priceRub: new Prisma.Decimal('5.00') },
+      ]);
+
+      await expect(
+        service.buySkins(123, { skinIds: [1, 2] }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.wallet.updateMany).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject insufficient wallet balance for total', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([skinA, skinB]);
+      (prisma.wallet.upsert as jest.Mock).mockResolvedValue(wallet);
+      (prisma.wallet.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.buySkins(123, { skinIds: [1, 2] }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.wallet.updateMany).toHaveBeenCalledWith({
+        where: {
+          userId: 123,
+          balance: { gte: new Prisma.Decimal('1000.00') },
+        },
+        data: { balance: { decrement: new Prisma.Decimal('1000.00') } },
+      });
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+      expect(prisma.inventoryTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('should debit wallet once by total and create items and transactions', async () => {
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([skinA, skinB]);
+      (prisma.wallet.upsert as jest.Mock).mockResolvedValue(wallet);
+      (prisma.wallet.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.wallet.findUnique as jest.Mock).mockResolvedValue({
+        ...wallet,
+        balance: new Prisma.Decimal('500.00'),
+      });
+      (prisma.inventoryItem.create as jest.Mock).mockImplementation(
+        ({ data }: { data: any }) =>
+          Promise.resolve({
+            id: data.skinId === 1 ? 10 : 11,
+            ...data,
+          }),
+      );
+
+      const result = await service.buySkins(123, { skinIds: [1, 2] });
+
+      expect(prisma.wallet.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.wallet.updateMany).toHaveBeenCalledWith({
+        where: {
+          userId: 123,
+          balance: { gte: new Prisma.Decimal('1000.00') },
+        },
+        data: { balance: { decrement: new Prisma.Decimal('1000.00') } },
+      });
+      expect(prisma.inventoryItem.create).toHaveBeenCalledTimes(2);
+      expect(prisma.inventoryTransaction.create).toHaveBeenCalledTimes(2);
+      expect(result.items).toHaveLength(2);
+      expect(result.totalPriceRub).toBe('1000');
+      expect(result.wallet.balance.toString()).toBe('500');
+    });
+  });
+
   describe('sellInventoryItem', () => {
     it('should reject missing or foreign item', async () => {
       (prisma.inventoryItem.updateMany as jest.Mock).mockResolvedValue({

@@ -20,6 +20,7 @@ describe('InventoryController', () => {
             getSkin: jest.fn(),
             getInventory: jest.fn(),
             buySkin: jest.fn(),
+            buySkins: jest.fn(),
             sellInventoryItem: jest.fn(),
             withdrawInventoryItem: jest.fn(),
           },
@@ -65,6 +66,21 @@ describe('InventoryController', () => {
       response,
     );
     expect(service.buySkin).toHaveBeenCalledWith(123, { skinId: 1 });
+  });
+
+  it('should use authenticated user id and skin ids for bulk buy endpoint', async () => {
+    const req = { user: { id: 123 } } as unknown as Request;
+    const response = {
+      items: [{ id: 10 }, { id: 11 }],
+      wallet: { balance: '500.00' },
+      totalPriceRub: '2000.00',
+    };
+    (service.buySkins as jest.Mock).mockResolvedValue(response);
+
+    await expect(
+      controller.buySkins(req, { skinIds: [1, 2] }),
+    ).resolves.toEqual(response);
+    expect(service.buySkins).toHaveBeenCalledWith(123, { skinIds: [1, 2] });
   });
 
   it('should use authenticated user id and item id for withdraw endpoint', async () => {

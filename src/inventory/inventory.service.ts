@@ -13,6 +13,7 @@ import {
   WaxpeerListing,
 } from '../skins/providers/waxpeer-withdrawal.provider';
 import { BuySkinDto } from './dto/buy-skin.dto';
+import { BuySkinsDto } from './dto/buy-skins.dto';
 import { ListSkinsDto } from './dto/list-skins.dto';
 import { SellInventoryItemDto } from './dto/sell-inventory-item.dto';
 import { WithdrawInventoryItemDto } from './dto/withdraw-inventory-item.dto';
@@ -230,6 +231,129 @@ export class InventoryService {
       });
 
       return { item, wallet: updatedWallet };
+    });
+  }
+
+  async buySkins(userId: number, dto: BuySkinsDto) {
+    const skinIds = dto.skinIds;
+    if (!Array.isArray(skinIds) || skinIds.length === 0) {
+      throw new BadRequestException('No skins selected');
+    }
+
+    const uniqueIds = new Set<number>();
+    for (const id of skinIds) {
+      if (!Number.isInteger(id) || id < 1) {
+        throw new BadRequestException('Invalid skin id');
+      }
+      if (uniqueIds.has(id)) {
+        throw new BadRequestException('Duplicate skin ids are not allowed');
+      }
+      uniqueIds.add(id);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const skins = await tx.skin.findMany({
+        where: { id: { in: skinIds } },
+      });
+
+      const foundIds = new Set(skins.map((s) => s.id));
+      for (const id of skinIds) {
+        if (!foundIds.has(id)) {
+          throw new NotFoundException(`Skin ${id} not found`);
+        }
+      }
+
+      for (const skin of skins) {
+        if (!skin.isActive) {
+          throw new BadRequestException(`Skin ${skin.id} is not active`);
+        }
+        if (skin.priceRub.lt(this.minPriceRub)) {
+          throw new BadRequestException(`Skin ${skin.id} is not available`);
+        }
+      }
+
+      const skinById = new Map(skins.map((s) => [s.id, s]));
+      const orderedSkins = skinIds.map((id) => skinById.get(id)!);
+
+      const totalPriceRub = orderedSkins.reduce(
+        (sum, skin) => sum.plus(skin.priceRub),
+        new Prisma.Decimal(0),
+      );
+
+      await tx.wallet.upsert({
+        where: { userId },
+        update: {},
+        create: {
+          userId,
+          balance: new Prisma.Decimal(0),
+          currency: 'RUB',
+        },
+      });
+
+      const debit = await tx.wallet.updateMany({
+        where: { userId, balance: { gte: totalPriceRub } },
+        data: { balance: { decrement: totalPriceRub } },
+      });
+
+      if (debit.count === 0) {
+        throw new BadRequestException('Insufficient wallet balance');
+      }
+
+      const updatedWallet = await tx.wallet.findUnique({ where: { userId } });
+      if (!updatedWallet) {
+        throw new NotFoundException('Wallet not found after purchase');
+      }
+
+      const items: Awaited<ReturnType<typeof tx.inventoryItem.create>>[] = [];
+      for (const skin of orderedSkins) {
+        const sellPriceRub = skin.priceRub
+          .mul(this.sellbackPercent)
+          .div(100)
+          .toDecimalPlaces(2);
+
+        const providerPriceUsdThousandthsAtPurchase =
+          await this.derivePriceCapThousandths(skin.priceRub);
+
+        const metadata: Record<string, unknown> = {
+          skinMarketHashName: skin.marketHashName,
+          skinPriceRub: skin.priceRub.toString(),
+        };
+        if (providerPriceUsdThousandthsAtPurchase !== null) {
+          metadata.providerPriceUsdThousandthsAtPurchase =
+            providerPriceUsdThousandthsAtPurchase;
+        }
+
+        const item = await tx.inventoryItem.create({
+          data: {
+            userId,
+            skinId: skin.id,
+            purchasePriceRub: skin.priceRub,
+            sellPriceRub,
+            status: 'owned',
+            source: 'purchase',
+            metadata: metadata as Prisma.InputJsonValue,
+          },
+          include: { skin: { select: this.publicSkinSelect } },
+        });
+
+        await tx.inventoryTransaction.create({
+          data: {
+            userId,
+            inventoryItemId: item.id,
+            type: 'purchase',
+            amountRub: skin.priceRub,
+            metadata: { skinId: skin.id },
+          },
+        });
+
+        items.push(item);
+      }
+
+      return {
+        items,
+        wallet: updatedWallet,
+        totalPriceRub: totalPriceRub.toDecimalPlaces(2).toString(),
+      };
     });
   }
 

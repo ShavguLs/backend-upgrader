@@ -12,6 +12,7 @@ import {
 import type { Request } from 'express';
 import { AuthenticatedGuard } from '../auth/authenticated.guard';
 import { BuySkinDto } from './dto/buy-skin.dto';
+import { BuySkinsDto } from './dto/buy-skins.dto';
 import { ListSkinsDto } from './dto/list-skins.dto';
 import { SellInventoryItemDto } from './dto/sell-inventory-item.dto';
 import { WithdrawInventoryItemDto } from './dto/withdraw-inventory-item.dto';
@@ -43,6 +44,13 @@ export class InventoryController {
   buySkin(@Req() req: Request, @Body() dto: BuySkinDto) {
     const user = req.user as { id: number };
     return this.inventoryService.buySkin(user.id, dto);
+  }
+
+  @Post('inventory/buy-bulk')
+  @UseGuards(AuthenticatedGuard)
+  buySkins(@Req() req: Request, @Body() dto: BuySkinsDto) {
+    const user = req.user as { id: number };
+    return this.inventoryService.buySkins(user.id, dto);
   }
 
   @Post('inventory/sell')
