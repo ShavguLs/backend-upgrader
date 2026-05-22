@@ -173,6 +173,7 @@ model UpgradeAttempt {
   @@index([sourceInventoryItemId])
   @@index([targetSkinId])
   @@index([wonInventoryItemId])
+  @@index([result, createdAt])
 }
 
 model Session {

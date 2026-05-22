@@ -19,6 +19,7 @@ describe('UpgraderController', () => {
             listOptions: jest.fn(),
             createAttempt: jest.fn(),
             listHistory: jest.fn(),
+            listDrops: jest.fn(),
           },
         },
       ],
@@ -79,5 +80,22 @@ describe('UpgraderController', () => {
 
     await expect(controller.listHistory(req, query)).resolves.toEqual(response);
     expect(service.listHistory).toHaveBeenCalledWith(123, query);
+  });
+
+  it('listDrops delegates to service without requiring req.user', async () => {
+    const query = { limit: 16 };
+    const response = { items: [] };
+    (service.listDrops as jest.Mock).mockResolvedValue(response);
+
+    await expect(controller.listDrops(query)).resolves.toEqual(response);
+    expect(service.listDrops).toHaveBeenCalledWith(query);
+  });
+
+  it('listDrops works with empty query (default limit applied in service)', async () => {
+    const response = { items: [] };
+    (service.listDrops as jest.Mock).mockResolvedValue(response);
+
+    await expect(controller.listDrops({})).resolves.toEqual(response);
+    expect(service.listDrops).toHaveBeenCalledWith({});
   });
 });

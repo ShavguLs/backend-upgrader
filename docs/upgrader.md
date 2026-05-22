@@ -78,6 +78,56 @@ client cannot influence it.
 `UPGRADER_MIN_DISPLAYED_CHANCE_PERCENT` must be less than
 `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT`.
 
+## `GET /upgrader/drops`
+
+Lists the most recent winning upgrade attempts across all users, for the
+public live drops feed. Only attempts with `result = "win"` and a non-null
+`wonInventoryItemId` are returned; attempts whose won inventory skin has
+been removed are filtered out.
+
+### Auth
+
+Not required (public).
+
+### Query
+
+| Name | Type | Required | Validation |
+| --- | --- | --- | --- |
+| `limit` | integer | No | Default `16`. Minimum `1`, maximum `50`. |
+
+### Response
+
+```json
+{
+  "items": [
+    {
+      "id": 99,
+      "createdAt": "2026-05-17T10:00:00.000Z",
+      "priceRub": "1800.00",
+      "skin": {
+        "id": 20,
+        "marketHashName": "AWP | Asiimov (Field-Tested)",
+        "name": "AWP | Asiimov",
+        "priceRub": "2000.00",
+        "imageUrl": null,
+        "isActive": true
+      }
+    }
+  ]
+}
+```
+
+Items are sorted by `createdAt` descending. `priceRub` is the raw catalog
+target price recorded on the attempt (`UpgradeAttempt.targetPriceRub`),
+not the user-received sellback value. `skin` carries the standard public
+skin fields of the won inventory item.
+
+### Errors
+
+| Status | Reason |
+| --- | --- |
+| `400` | Invalid query (e.g. `limit` out of range). |
+
 ## `GET /upgrader/options`
 
 Lists active target skins around the target price for a chance tier.

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUpgradeAttemptDto } from './dto/create-upgrade-attempt.dto';
+import { ListUpgradeDropsDto } from './dto/list-upgrade-drops.dto';
 import { ListUpgradeHistoryDto } from './dto/list-upgrade-history.dto';
 import {
   ListUpgradeOptionsDto,
@@ -425,6 +426,40 @@ export class UpgraderService {
         total,
         totalPages: Math.ceil(total / limit),
       },
+    };
+  }
+
+  async listDrops(query: ListUpgradeDropsDto) {
+    const limit = query.limit ?? 16;
+
+    const attempts = await this.prisma.upgradeAttempt.findMany({
+      where: {
+        result: 'win',
+        wonInventoryItemId: { not: null },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        targetPriceRub: true,
+        wonInventoryItem: {
+          select: {
+            skin: { select: this.publicSkinSelect },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    return {
+      items: attempts
+        .filter((attempt) => attempt.wonInventoryItem?.skin)
+        .map((attempt) => ({
+          id: attempt.id,
+          createdAt: attempt.createdAt,
+          priceRub: attempt.targetPriceRub.toFixed(2),
+          skin: attempt.wonInventoryItem!.skin,
+        })),
     };
   }
 
