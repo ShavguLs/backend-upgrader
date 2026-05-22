@@ -35,8 +35,8 @@ export class UpgraderService {
   private readonly sellbackPercent = (() => {
     const value = new Prisma.Decimal(process.env.SKIN_SELLBACK_PERCENT || '90');
 
-    if (value.lt(0) || value.gt(100)) {
-      throw new Error('SKIN_SELLBACK_PERCENT must be between 0 and 100');
+    if (value.lte(0) || value.gt(100)) {
+      throw new Error('SKIN_SELLBACK_PERCENT must be > 0 and <= 100');
     }
 
     return value;
@@ -220,7 +220,10 @@ export class UpgraderService {
       );
     }
 
-    const effectiveChancePercent = displayedChancePercent
+    const fairChancePercent = sourceValueRub
+      .mul(HUNDRED)
+      .div(targetReceivedValueRub);
+    const effectiveChancePercent = fairChancePercent
       .mul(new Prisma.Decimal(1).minus(this.houseEdgePercent.div(100)))
       .toDecimalPlaces(4);
 

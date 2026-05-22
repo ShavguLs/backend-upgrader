@@ -162,6 +162,22 @@ describe('UpgraderService', () => {
         },
       );
     });
+
+    it('rejects SKIN_SELLBACK_PERCENT=0 (division-by-zero guard)', () => {
+      withEnv({ SKIN_SELLBACK_PERCENT: '0' }, () => {
+        expect(() => new UpgraderService(prisma)).toThrow(
+          'SKIN_SELLBACK_PERCENT must be > 0 and <= 100',
+        );
+      });
+    });
+
+    it('rejects SKIN_SELLBACK_PERCENT above 100', () => {
+      withEnv({ SKIN_SELLBACK_PERCENT: '101' }, () => {
+        expect(() => new UpgraderService(prisma)).toThrow(
+          'SKIN_SELLBACK_PERCENT must be > 0 and <= 100',
+        );
+      });
+    });
   });
 
   describe('listOptions', () => {
@@ -559,6 +575,56 @@ describe('UpgraderService', () => {
       expect(createCall.data.displayedChancePercent.toString()).toBe('50');
       expect(createCall.data.effectiveChancePercent.toString()).toBe('45');
       expect(createCall.data.houseEdgePercent.toString()).toBe('10');
+    });
+
+    it('scales effective chance to the actual target value so house edge holds across the tolerance window', async () => {
+      // With the documented default tolerance of 15%, source 900 / chance 50
+      // gives ideal received 1800 and upper received 2070. A target priced
+      // 2200 -> received 1980 sits inside that window. Without the fix,
+      // effective = 50 * 0.9 = 45% and EV = 0.45 * 1980 = 891, leaving only
+      // 1% house edge instead of the configured 10% — a near positive-EV
+      // play. With the fix, fair chance is derived from the actual target:
+      // 900 / 1980 * 100 ≈ 45.4545%, effective ≈ 40.9091%, EV ≈ 810 (~10%
+      // house edge restored).
+      const savedTolerance =
+        process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT;
+      process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT = '15';
+      try {
+        const wideTolerance = new UpgraderService(prisma);
+        setupForAttempt({
+          rollBasisPoints: 100_000,
+          targetSkin: {
+            ...targetSkin,
+            priceRub: new Prisma.Decimal('2200.00'),
+          },
+        });
+
+        await wideTolerance.createAttempt(123, {
+          inventoryItemId: 10,
+          targetSkinId: 20,
+          chance: 50,
+        });
+
+        const createCall = (prisma.upgradeAttempt.create as jest.Mock).mock
+          .calls[0][0];
+        const effective = new Prisma.Decimal(
+          createCall.data.effectiveChancePercent,
+        );
+        const targetReceived = new Prisma.Decimal('1980.00');
+        const ev = effective.div(100).mul(targetReceived);
+        // EV must not exceed source value (no positive-EV plays for the user).
+        expect(ev.lte(new Prisma.Decimal('900'))).toBe(true);
+        // Effective chance should be below the naive 45%.
+        expect(effective.lt(new Prisma.Decimal('45'))).toBe(true);
+        // displayedChancePercent is still the user-facing tier they selected.
+        expect(createCall.data.displayedChancePercent.toString()).toBe('50');
+      } finally {
+        if (savedTolerance === undefined) {
+          delete process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT;
+        } else {
+          process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT = savedTolerance;
+        }
+      }
     });
 
     it('rejects when claim updateMany returns count 0 (double-spend protection)', async () => {
