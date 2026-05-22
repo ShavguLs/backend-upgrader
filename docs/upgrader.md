@@ -25,43 +25,74 @@ sellback margin applied when entering inventory. The raw catalog price
 remains visible as `Skin.priceRub` but the upgrader's chance math, target
 window, and user-facing value are all expressed in received-value space.
 
-## Chance Tiers
+## Chance Tiers and Per-Target Chance
 
-The frontend offers fixed displayed chance tiers `10%`, `25%`, `50%`, and
-`75%`. The user-selected tier is the source of truth for the displayed
-chance — the backend does **not** derive the chance from the chosen target
-skin's price. The ideal target received value for a tier is calculated as:
-
-```text
-idealReceivedValueRub = sourceValueRub / (displayedChancePercent / 100)
-```
-
-The target skin's received value must fall in the one-sided window:
+The frontend offers fixed requested chance tiers `10%`, `25%`, `50%`, and
+`75%`. The user-selected tier is a **lower-bound search anchor**, not
+the final locked attempt chance. The backend recalculates the actual
+displayed chance for each candidate target — and again for the chosen
+target on attempt — from the source and target values:
 
 ```text
-idealReceivedValueRub <= targetReceivedValueRub <= idealReceivedValueRub * (1 + UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT / 100)
+displayedChancePercent = sourceValueRub / targetReceivedValueRub * 100
 ```
 
-The window is one-sided upward on purpose: a cheaper-than-ideal target
-would silently raise the true chance above the displayed tier and shrink
-the house edge.
+The ideal target received value for the requested tier is:
 
-Internally `listOptions` converts the received-value bounds back into raw
-`Skin.priceRub` bounds before querying, keeping the existing
+```text
+idealReceivedValueRub = sourceValueRub / (requestedChancePercent / 100)
+```
+
+The actual chance for an accepted target must fall in the broad range
+anchored by the requested tier on the low end and the configured maximum
+on the high end:
+
+```text
+minAllowedChance = requestedChancePercent
+maxAllowedChance = UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT
+```
+
+For a selected tier of `10%` with the default maximum of `75%`, that
+range is `[10%, 75%]` — every active target whose actual chance falls
+in that band is eligible, so users can pick safer (higher-chance, more
+modest target) or riskier (lower-chance, juicier target) options within
+the same selection. Picking `75%` collapses the range to roughly `75%`
+only, because the requested tier already equals the max.
+
+Because price and chance move in opposite directions, `listOptions`
+converts the chance range into received-value bounds:
+
+```text
+lowerReceivedValueRub = sourceValueRub / (maxAllowedChance / 100)
+upperReceivedValueRub = sourceValueRub / (minAllowedChance / 100)
+```
+
+…then into raw `Skin.priceRub` bounds to keep the existing
 `[isActive, priceRub]` index efficient:
 
 ```text
-rawLowerPriceRub = idealReceivedValueRub / (SKIN_SELLBACK_PERCENT / 100)
+rawLowerPriceRub = lowerReceivedValueRub / (SKIN_SELLBACK_PERCENT / 100)
 rawUpperPriceRub = upperReceivedValueRub / (SKIN_SELLBACK_PERCENT / 100)
 ```
 
+`SKIN_MIN_PRICE_RUB` raises the lower price bound if the raw bound for a
+very cheap source item would otherwise fall below it.
+
 ## Hidden House Edge
 
-The backend applies a hidden house edge to derive the effective roll
-chance. With `UPGRADER_HOUSE_EDGE_PERCENT=10`, a displayed 50% chance is
-rolled at 45%. The displayed chance is the only chance returned to the
-client. The effective chance is stored on the `UpgradeAttempt` record and
-in the audit `InventoryTransaction.metadata` for debugging.
+The backend applies a hidden house edge to the **actual** displayed
+chance for the chosen target — not to the requested tier. With
+`UPGRADER_HOUSE_EDGE_PERCENT=10`, an actual displayed chance of 55.5556%
+is rolled at 50.0000%. This keeps the configured house edge constant
+across the broad chance range — a target whose actual chance happens to
+be 60% gets the same proportional house edge as one at 20%.
+
+The actual displayed chance is what is returned to the client and stored
+on `UpgradeAttempt.displayedChancePercent`. The requested tier the user
+selected is preserved on `UpgradeAttempt.metadata.requestedChancePercent`
+for audit clarity. The effective chance is stored on the
+`UpgradeAttempt` record and in the audit `InventoryTransaction.metadata`
+for debugging.
 
 The roll is generated server-side from Node `crypto.randomInt` and the
 client cannot influence it.
@@ -72,8 +103,7 @@ client cannot influence it.
 | --- | --- | --- |
 | `UPGRADER_HOUSE_EDGE_PERCENT` | `10` | Must be `>= 0` and `< 100`. |
 | `UPGRADER_MIN_DISPLAYED_CHANCE_PERCENT` | `1` | Must be `> 0`. |
-| `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT` | `75` | Must be `<= 95`. |
-| `UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT` | `15` | Must be `>= 0`. Width of the price window when listing target options. |
+| `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT` | `75` | Must be `<= 95`. Also the upper anchor for the broad chance range when listing target options or validating an attempt. |
 
 `UPGRADER_MIN_DISPLAYED_CHANCE_PERCENT` must be less than
 `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT`.
@@ -130,7 +160,8 @@ skin fields of the won inventory item.
 
 ## `GET /upgrader/options`
 
-Lists active target skins around the target price for a chance tier.
+Lists active target skins whose actual chance falls in the broad range
+from the requested tier up to the configured maximum displayed chance.
 
 ### Auth
 
@@ -141,38 +172,60 @@ Required.
 | Name | Type | Required | Validation |
 | --- | --- | --- | --- |
 | `inventoryItemId` | integer | Yes | Minimum `1`; must reference an `owned` item belonging to the user. |
-| `chance` | integer | Yes | One of `10`, `25`, `50`, `75`. |
+| `chance` | integer | Yes | One of `10`, `25`, `50`, `75`. Used as the lower-bound anchor of the chance range. |
 
 ### Response
 
 ```json
 {
   "sourceValueRub": "900.00",
-  "displayedChancePercent": "50.0000",
-  "targetValueRub": "1800.00",
+  "requestedChancePercent": "10.0000",
+  "displayedChancePercent": "10.0000",
+  "targetValueRub": "9000.00",
   "items": [
     {
       "id": 20,
       "marketHashName": "AWP | Asiimov (Field-Tested)",
-      "priceRub": "2000.00",
-      "receivedValueRub": "1800.00",
+      "priceRub": "10000.00",
+      "receivedValueRub": "9000.00",
+      "displayedChancePercent": "10.0000",
+      "isActive": true
+    },
+    {
+      "id": 21,
+      "marketHashName": "M4A4 | Asiimov (Field-Tested)",
+      "priceRub": "6666.67",
+      "receivedValueRub": "6000.00",
+      "displayedChancePercent": "15.0000",
+      "isActive": true
+    },
+    {
+      "id": 22,
+      "marketHashName": "AK-47 | Redline (Field-Tested)",
+      "priceRub": "4000.00",
+      "receivedValueRub": "3600.00",
+      "displayedChancePercent": "25.0000",
       "isActive": true
     }
   ]
 }
 ```
 
-`targetValueRub` is the ideal received value for the selected chance tier
-(equal to each candidate's post-win `sellPriceRub` when the candidate's
-received value matches the tier exactly). `receivedValueRub` on each item
-is `priceRub * SKIN_SELLBACK_PERCENT / 100`, rounded to 2 decimal places.
+`requestedChancePercent` echoes the tier the client requested.
+Response-level `displayedChancePercent` mirrors it for backwards
+compatibility — the **per-item** `displayedChancePercent` is the actual
+chance for that specific target, computed from
+`sourceValueRub / receivedValueRub * 100`. `targetValueRub` is the ideal
+received value for the selected tier; `receivedValueRub` on each item is
+`priceRub * SKIN_SELLBACK_PERCENT / 100`, rounded to 2 decimal places.
 
-`items` returns at most 24 active skins with raw `priceRub` in
-`[max(rawLowerPriceRub, SKIN_MIN_PRICE_RUB), rawUpperPriceRub]`, sorted by
-distance from `idealReceivedValueRub` (in received-value space). The
-server minimum price (`SKIN_MIN_PRICE_RUB`, default `10`) raises the lower
-bound when the raw bound for a very cheap source item would otherwise
-fall below it.
+`items` returns at most 60 active skins with raw `priceRub` in
+`[max(rawLowerPriceRub, SKIN_MIN_PRICE_RUB), rawUpperPriceRub]`, after a
+defensive filter that drops any candidate whose actual chance is below
+the requested tier, above `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT`, or
+outside the configured global min/max. Items are sorted by actual chance
+ascending (closest-to-requested tier first), then by `priceRub`
+descending, then by `id` ascending.
 
 ### Errors
 
@@ -206,15 +259,15 @@ Required.
 | --- | --- | --- | --- |
 | `inventoryItemId` | integer | Yes | Minimum `1`. |
 | `targetSkinId` | integer | Yes | Minimum `1`. |
-| `chance` | integer | Yes | One of `10`, `25`, `50`, `75`. Used directly as the displayed chance. |
+| `chance` | integer | Yes | One of `10`, `25`, `50`, `75`. Used as the lower-bound anchor — the backend recalculates the actual displayed chance from the source and target and rejects the attempt if the actual chance falls below the requested tier or above the configured maximum. |
 
 ### Response
 
 ```json
 {
   "result": "win",
-  "displayedChancePercent": "50.0000",
-  "targetReceivedValueRub": "1800.00",
+  "displayedChancePercent": "49.0196",
+  "targetReceivedValueRub": "1836.00",
   "sourceItem": {
     "id": 10,
     "status": "upgraded_used"
@@ -235,6 +288,11 @@ Required.
   }
 }
 ```
+
+`displayedChancePercent` is the actual chance recalculated from the
+source and target (not the requested tier the client posted). On a
+roll, the wheel/result animation should be driven by this value. The
+requested tier is preserved on `UpgradeAttempt.metadata.requestedChancePercent`.
 
 `targetReceivedValueRub` is the value the user actually receives in their
 inventory on a win — equal to the new `wonItem.sellPriceRub`. The raw
@@ -266,7 +324,7 @@ more `InventoryTransaction` rows:
 
 | Status | Reason |
 | --- | --- |
-| `400` | Invalid body, inventory item not found or not owned, target skin not found, inactive, or below `SKIN_MIN_PRICE_RUB`, target received value below the ideal for the selected chance, target received value above the upper tolerance bound, displayed chance outside configured min/max, or item not available for upgrade (double-spend protection). |
+| `400` | Invalid body, inventory item not found or not owned, target skin not found, inactive, or below `SKIN_MIN_PRICE_RUB`, target price too low for the selected chance (actual chance above `UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT`), target price too high for the selected chance (actual chance below the requested tier), actual chance outside the configured global min/max, or item not available for upgrade (double-spend protection). |
 | `401` | Not authenticated. |
 
 ## `GET /upgrader/history`

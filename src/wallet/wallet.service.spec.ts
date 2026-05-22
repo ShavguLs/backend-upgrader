@@ -23,6 +23,7 @@ describe('WalletService', () => {
               create: jest.fn(),
               upsert: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn(),
             },
             deposit: {
               findMany: jest.fn(),
@@ -68,6 +69,24 @@ describe('WalletService', () => {
       );
     });
 
+    it('should reject deposits when free mode is enabled', async () => {
+      const originalFreeMode = process.env.FREE_MODE;
+      process.env.FREE_MODE = 'true';
+      try {
+        await expect(
+          service.createDeposit(1, { amountRub: 500 }),
+        ).rejects.toThrow(BadRequestException);
+        expect(prisma.deposit.create).not.toHaveBeenCalled();
+        expect(plisioService.createInvoice).not.toHaveBeenCalled();
+      } finally {
+        if (originalFreeMode === undefined) {
+          delete process.env.FREE_MODE;
+        } else {
+          process.env.FREE_MODE = originalFreeMode;
+        }
+      }
+    });
+
     it('should create deposit and return invoice url', async () => {
       (prisma.deposit.create as jest.Mock).mockResolvedValue({
         id: 1,
@@ -97,6 +116,84 @@ describe('WalletService', () => {
       expect(prisma.deposit.create).toHaveBeenCalled();
       expect(plisioService.createInvoice).toHaveBeenCalled();
       expect(prisma.deposit.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('getWallet (free mode)', () => {
+    function withFreeMode<T>(fn: () => Promise<T> | T): Promise<T> {
+      const original = process.env.FREE_MODE;
+      process.env.FREE_MODE = 'true';
+      return Promise.resolve()
+        .then(fn)
+        .finally(() => {
+          if (original === undefined) {
+            delete process.env.FREE_MODE;
+          } else {
+            process.env.FREE_MODE = original;
+          }
+        });
+    }
+
+    it('grants the starting balance when freeModeGrantClaimedAt is null', async () => {
+      await withFreeMode(async () => {
+        (prisma.wallet.upsert as jest.Mock).mockResolvedValue({
+          id: 1,
+          userId: 1,
+          balance: new Prisma.Decimal(0),
+          freeModeGrantClaimedAt: null,
+        });
+        (prisma.wallet.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+        const grantedAt = new Date();
+        (prisma.wallet.findUnique as jest.Mock).mockResolvedValue({
+          id: 1,
+          userId: 1,
+          balance: new Prisma.Decimal('100000.00'),
+          freeModeGrantClaimedAt: grantedAt,
+        });
+
+        const result = await service.getWallet(1);
+
+        expect(prisma.wallet.updateMany).toHaveBeenCalledWith({
+          where: { userId: 1, freeModeGrantClaimedAt: null },
+          data: {
+            balance: { increment: new Prisma.Decimal('100000') },
+            freeModeGrantClaimedAt: expect.any(Date),
+          },
+        });
+        expect(result.wallet.balance).toEqual(new Prisma.Decimal('100000.00'));
+        expect(result.wallet.freeModeGrantClaimedAt).toBe(grantedAt);
+      });
+    });
+
+    it('does not re-grant when freeModeGrantClaimedAt is already set', async () => {
+      await withFreeMode(async () => {
+        const grantedAt = new Date('2026-05-22T12:00:00.000Z');
+        (prisma.wallet.upsert as jest.Mock).mockResolvedValue({
+          id: 1,
+          userId: 1,
+          balance: new Prisma.Decimal('5000.00'),
+          freeModeGrantClaimedAt: grantedAt,
+        });
+
+        const result = await service.getWallet(1);
+
+        expect(prisma.wallet.updateMany).not.toHaveBeenCalled();
+        expect(result.wallet.balance).toEqual(new Prisma.Decimal('5000.00'));
+      });
+    });
+
+    it('keeps current behavior when free mode is disabled', async () => {
+      (prisma.wallet.upsert as jest.Mock).mockResolvedValue({
+        id: 1,
+        userId: 1,
+        balance: new Prisma.Decimal(0),
+        freeModeGrantClaimedAt: null,
+      });
+
+      const result = await service.getWallet(1);
+
+      expect(prisma.wallet.updateMany).not.toHaveBeenCalled();
+      expect(result.wallet.balance).toEqual(new Prisma.Decimal(0));
     });
   });
 

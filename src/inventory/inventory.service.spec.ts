@@ -722,6 +722,25 @@ describe('InventoryService', () => {
       );
     }
 
+    it('rejects in free mode before provider checks', async () => {
+      const original = process.env.FREE_MODE;
+      process.env.FREE_MODE = 'true';
+      try {
+        await expect(
+          service.withdrawInventoryItem(123, { inventoryItemId: 10 }),
+        ).rejects.toThrow(BadRequestException);
+        expect(waxpeerWithdrawal.isConfigured).not.toHaveBeenCalled();
+        expect(prisma.user.findUnique).not.toHaveBeenCalled();
+        expect(prisma.inventoryItem.findUnique).not.toHaveBeenCalled();
+      } finally {
+        if (original === undefined) {
+          delete process.env.FREE_MODE;
+        } else {
+          process.env.FREE_MODE = original;
+        }
+      }
+    });
+
     it('rejects when withdrawal provider is unconfigured', async () => {
       (waxpeerWithdrawal.isConfigured as jest.Mock).mockReturnValue(false);
       await expect(

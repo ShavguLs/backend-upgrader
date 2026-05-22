@@ -23,8 +23,26 @@ export class WalletService {
     private readonly plisioService: PlisioService,
   ) {}
 
+  private isFreeModeEnabled(): boolean {
+    return process.env.FREE_MODE === 'true';
+  }
+
+  private getFreeModeStartingBalance(): Prisma.Decimal {
+    const raw = process.env.FREE_MODE_STARTING_BALANCE_RUB || '100000';
+    let value: Prisma.Decimal;
+    try {
+      value = new Prisma.Decimal(raw);
+    } catch {
+      value = new Prisma.Decimal('100000');
+    }
+    if (!value.isFinite() || value.lte(0)) {
+      value = new Prisma.Decimal('100000');
+    }
+    return value;
+  }
+
   async getWallet(userId: number) {
-    const wallet = await this.prisma.wallet.upsert({
+    let wallet = await this.prisma.wallet.upsert({
       where: { userId },
       update: {},
       create: {
@@ -33,6 +51,25 @@ export class WalletService {
         currency: 'RUB',
       },
     });
+
+    if (this.isFreeModeEnabled() && wallet.freeModeGrantClaimedAt === null) {
+      const startingBalance = this.getFreeModeStartingBalance();
+      const claim = await this.prisma.wallet.updateMany({
+        where: { userId, freeModeGrantClaimedAt: null },
+        data: {
+          balance: { increment: startingBalance },
+          freeModeGrantClaimedAt: new Date(),
+        },
+      });
+      if (claim.count > 0) {
+        const refreshed = await this.prisma.wallet.findUnique({
+          where: { userId },
+        });
+        if (refreshed) {
+          wallet = refreshed;
+        }
+      }
+    }
 
     const deposits = await this.prisma.deposit.findMany({
       where: { userId },
@@ -44,6 +81,10 @@ export class WalletService {
   }
 
   async createDeposit(userId: number, dto: CreateDepositDto) {
+    if (this.isFreeModeEnabled()) {
+      throw new BadRequestException('Deposits are disabled in free mode.');
+    }
+
     if (dto.amountRub < this.minDepositRub) {
       throw new BadRequestException(
         `Minimum deposit is ${this.minDepositRub} RUB`,

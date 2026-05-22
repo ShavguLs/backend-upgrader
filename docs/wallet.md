@@ -2,11 +2,26 @@
 
 Wallet endpoints manage user balance and crypto deposit invoices.
 
+## Free mode
+
+When `FREE_MODE=true`:
+
+- `GET /wallet` grants `FREE_MODE_STARTING_BALANCE_RUB` (default `100000`)
+  to the wallet once, the first time it is fetched. The grant is tracked
+  by `wallet.freeModeGrantClaimedAt` and never re-applied for the same wallet.
+- `POST /wallet/deposits` returns `400` — deposits are disabled.
+- Frontend `NEXT_PUBLIC_FREE_MODE` should match this setting; otherwise
+  the UI and backend will disagree about whether deposits/withdrawals
+  are available.
+
 ## `GET /wallet`
 
 Returns the current user's wallet and 10 most recent deposits.
 
-If the wallet does not exist yet, it is created with `0 RUB`.
+If the wallet does not exist yet, it is created with `0 RUB`. When
+`FREE_MODE=true` and the wallet has not yet received the free-mode grant
+(`freeModeGrantClaimedAt` is null), the starting balance is credited and
+`freeModeGrantClaimedAt` is set.
 
 ### Auth
 
@@ -90,7 +105,7 @@ Returns the created deposit after Plisio invoice fields are saved.
 
 | Status | Reason |
 | --- | --- |
-| `400` | Invalid body or amount below minimum deposit. |
+| `400` | Invalid body, amount below minimum deposit, or `FREE_MODE=true`. |
 | `401` | Not authenticated. |
 
 ## `POST /wallet/plisio/callback`

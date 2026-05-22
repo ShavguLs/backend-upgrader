@@ -403,6 +403,10 @@ export class InventoryService {
   }
 
   async withdrawInventoryItem(userId: number, dto: WithdrawInventoryItemDto) {
+    if (process.env.FREE_MODE === 'true') {
+      throw new BadRequestException('Withdrawals are disabled in free mode.');
+    }
+
     if (!this.waxpeerWithdrawal.isConfigured()) {
       throw new BadGatewayException(
         'Withdrawals are currently unavailable. Please try again later.',

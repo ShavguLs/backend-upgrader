@@ -15,9 +15,35 @@ jest.mock('crypto', () => {
 
 import { randomInt } from 'crypto';
 
+const UPGRADER_ENV_DEFAULTS: Record<string, string> = {
+  SKIN_SELLBACK_PERCENT: '90',
+  SKIN_MIN_PRICE_RUB: '10',
+  UPGRADER_HOUSE_EDGE_PERCENT: '10',
+  UPGRADER_MIN_DISPLAYED_CHANCE_PERCENT: '1',
+  UPGRADER_MAX_DISPLAYED_CHANCE_PERCENT: '75',
+};
+
 describe('UpgraderService', () => {
   let service: UpgraderService;
   let prisma: PrismaService;
+  const savedUpgraderEnv: Record<string, string | undefined> = {};
+
+  beforeAll(() => {
+    for (const [key, value] of Object.entries(UPGRADER_ENV_DEFAULTS)) {
+      savedUpgraderEnv[key] = process.env[key];
+      process.env[key] = value;
+    }
+  });
+
+  afterAll(() => {
+    for (const key of Object.keys(savedUpgraderEnv)) {
+      if (savedUpgraderEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedUpgraderEnv[key];
+      }
+    }
+  });
 
   const ownedItem = {
     id: 10,
@@ -152,17 +178,6 @@ describe('UpgraderService', () => {
       );
     });
 
-    it('rejects negative tolerance', () => {
-      withEnv(
-        { UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT: '-1' },
-        () => {
-          expect(() => new UpgraderService(prisma)).toThrow(
-            'UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT must be >= 0',
-          );
-        },
-      );
-    });
-
     it('rejects SKIN_SELLBACK_PERCENT=0 (division-by-zero guard)', () => {
       withEnv({ SKIN_SELLBACK_PERCENT: '0' }, () => {
         expect(() => new UpgraderService(prisma)).toThrow(
@@ -190,12 +205,12 @@ describe('UpgraderService', () => {
       expect(prisma.skin.findMany).not.toHaveBeenCalled();
     });
 
-    it('uses sellPriceRub to compute target value and returns skins around the raw price bound', async () => {
+    it('queries a broad chance range from requested tier up to max displayed chance', async () => {
       (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([
         { ...targetSkin, id: 20, priceRub: new Prisma.Decimal('2000.00') },
-        { ...targetSkin, id: 21, priceRub: new Prisma.Decimal('2050.00') },
-        { ...targetSkin, id: 22, priceRub: new Prisma.Decimal('2100.00') },
+        { ...targetSkin, id: 21, priceRub: new Prisma.Decimal('1800.00') },
+        { ...targetSkin, id: 22, priceRub: new Prisma.Decimal('1500.00') },
       ]);
 
       const result: any = await service.listOptions(123, {
@@ -211,19 +226,128 @@ describe('UpgraderService', () => {
       expect(result).not.toHaveProperty('targetPriceRub');
       expect(result.sourceValueRub).toBe('900.00');
       expect(result.displayedChancePercent).toBe('50.0000');
+      expect(result.requestedChancePercent).toBe('50.0000');
+      // Sorted by actual chance ascending:
+      // 2000 -> received 1800 -> chance 50.0000
+      // 1800 -> received 1620 -> chance 55.5556
+      // 1500 -> received 1350 -> chance 66.6667
       expect(result.items.map((s: any) => s.id)).toEqual([20, 21, 22]);
-      // received = raw * 0.9
       expect(result.items[0].receivedValueRub).toBe('1800.00');
-      expect(result.items[1].receivedValueRub).toBe('1845.00');
-      expect(result.items[2].receivedValueRub).toBe('1890.00');
+      expect(result.items[1].receivedValueRub).toBe('1620.00');
+      expect(result.items[2].receivedValueRub).toBe('1350.00');
+      expect(result.items[0].displayedChancePercent).toBe('50.0000');
+      expect(result.items[1].displayedChancePercent).toBe('55.5556');
+      expect(result.items[2].displayedChancePercent).toBe('66.6667');
 
-      const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
-      // rawLower = 1800 / 0.9 = 2000; one-sided tolerance only upward.
-      expect(findManyCall.where.priceRub.gte).toEqual(
-        new Prisma.Decimal('2000.00'),
-      );
-      expect(findManyCall.where.priceRub).not.toHaveProperty('gt');
-      expect(findManyCall.where.isActive).toBe(true);
+      // Broad range: requested 50% is lower anchor, max 75% is upper anchor.
+      // lowerReceived = 900 / 0.75 = 1200.00; rawLower = 1200 / 0.9 = 1333.33
+      // upperReceived = 900 / 0.50 = 1800.00; rawUpper = 1800 / 0.9 = 2000.00
+      const calls = (prisma.skin.findMany as jest.Mock).mock.calls;
+      expect(calls).toHaveLength(1);
+      const call = calls[0][0];
+      expect(call.where.priceRub.gte).toEqual(new Prisma.Decimal('1333.33'));
+      expect(call.where.priceRub.lte).toEqual(new Prisma.Decimal('2000.00'));
+      expect(call.where.isActive).toBe(true);
+      expect(call.orderBy).toEqual([{ priceRub: 'desc' }, { id: 'asc' }]);
+      expect(call.take).toBe(200);
+    });
+
+    it('returns cheaper targets above the requested tier with their actual higher chance', async () => {
+      // source 900, requested 50% => broad range [50%, 75%].
+      // Target priceRub 1800 -> received 1620 -> chance 900/1620*100 = 55.5556%.
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        { ...targetSkin, id: 30, priceRub: new Prisma.Decimal('1800.00') },
+      ]);
+
+      const result: any = await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 50,
+      });
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].id).toBe(30);
+      expect(result.items[0].receivedValueRub).toBe('1620.00');
+      expect(result.items[0].displayedChancePercent).toBe('55.5556');
+    });
+
+    it('sorts items by actual chance ascending, then price descending, then id ascending', async () => {
+      // source 900, requested 50%, range [50%, 75%].
+      // priceRub 2000 -> received 1800 -> chance 50.0000
+      // priceRub 1500 -> received 1350 -> chance 66.6667
+      // priceRub 1700 -> received 1530 -> chance 58.8235
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        { ...targetSkin, id: 60, priceRub: new Prisma.Decimal('1500.00') },
+        { ...targetSkin, id: 61, priceRub: new Prisma.Decimal('1700.00') },
+        { ...targetSkin, id: 62, priceRub: new Prisma.Decimal('2000.00') },
+      ]);
+
+      const result: any = await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 50,
+      });
+
+      expect(result.items.map((s: any) => s.id)).toEqual([62, 61, 60]);
+    });
+
+    it('excludes targets below the requested tier', async () => {
+      // source 900, requested 50%, range [50%, 75%].
+      // priceRub 2400 -> received 2160 -> chance 41.6667% < 50% => excluded.
+      // priceRub 2000 -> received 1800 -> chance 50.0000% => included.
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        { ...targetSkin, id: 70, priceRub: new Prisma.Decimal('2400.00') },
+        { ...targetSkin, id: 71, priceRub: new Prisma.Decimal('2000.00') },
+      ]);
+
+      const result: any = await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 50,
+      });
+
+      expect(result.items.map((s: any) => s.id)).toEqual([71]);
+    });
+
+    it('excludes targets above the configured max displayed chance', async () => {
+      // source 900, requested 10%, range [10%, 75%].
+      // priceRub 1100 -> received 990 -> chance 90.9091% > 75% => excluded.
+      // priceRub 1500 -> received 1350 -> chance 66.6667% => included.
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        { ...targetSkin, id: 80, priceRub: new Prisma.Decimal('1100.00') },
+        { ...targetSkin, id: 81, priceRub: new Prisma.Decimal('1500.00') },
+      ]);
+
+      const result: any = await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 10,
+      });
+
+      expect(result.items.map((s: any) => s.id)).toEqual([81]);
+    });
+
+    it('returns targets at 10%, 15%, and 25% when 10% tier is selected', async () => {
+      // source 900, requested 10%, range [10%, 75%].
+      // priceRub 10000 -> received 9000 -> chance 10.0000
+      // priceRub 6666.67 -> received 6000 -> chance 15.0000
+      // priceRub 4000 -> received 3600 -> chance 25.0000
+      (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findMany as jest.Mock).mockResolvedValue([
+        { ...targetSkin, id: 90, priceRub: new Prisma.Decimal('10000.00') },
+        { ...targetSkin, id: 91, priceRub: new Prisma.Decimal('6666.67') },
+        { ...targetSkin, id: 92, priceRub: new Prisma.Decimal('4000.00') },
+      ]);
+
+      const result: any = await service.listOptions(123, {
+        inventoryItemId: 10,
+        chance: 10,
+      });
+
+      expect(result.items.map((s: any) => s.id)).toEqual([90, 91, 92]);
+      expect(result.items[0].displayedChancePercent).toBe('10.0000');
+      expect(result.items[1].displayedChancePercent).toBe('15.0000');
+      expect(result.items[2].displayedChancePercent).toBe('25.0000');
     });
 
     it('rejects when displayed chance exceeds configured maximum', async () => {
@@ -270,7 +394,7 @@ describe('UpgraderService', () => {
       }
     });
 
-    it('uses correct target value for 25% tier', async () => {
+    it('uses correct target value and broad price range for the 25% tier', async () => {
       (prisma.inventoryItem.findFirst as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findMany as jest.Mock).mockResolvedValue([]);
 
@@ -279,11 +403,17 @@ describe('UpgraderService', () => {
         chance: 25,
       });
 
-      // ideal received = 900 / (25/100) = 3600
+      // ideal received = 900 / (25/100) = 3600; ideal raw = 3600/0.9 = 4000
       expect(result.targetValueRub).toBe('3600.00');
-      // rawLower = 3600 / 0.9 = 4000
-      const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
-      expect(findManyCall.where.priceRub.gte).toEqual(
+      // Broad range: [25%, 75%]
+      // lowerReceived = 900 / 0.75 = 1200.00; rawLower = 1200 / 0.9 = 1333.33
+      // upperReceived = 900 / 0.25 = 3600.00; rawUpper = 3600 / 0.9 = 4000.00
+      const calls = (prisma.skin.findMany as jest.Mock).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0].where.priceRub.gte).toEqual(
+        new Prisma.Decimal('1333.33'),
+      );
+      expect(calls[0][0].where.priceRub.lte).toEqual(
         new Prisma.Decimal('4000.00'),
       );
     });
@@ -302,9 +432,7 @@ describe('UpgraderService', () => {
 
       // ideal target = 3 / 0.75 = 4.00 which is below default 10 minimum.
       const findManyCall = (prisma.skin.findMany as jest.Mock).mock.calls[0][0];
-      expect(findManyCall.where.priceRub.gte).toEqual(
-        new Prisma.Decimal('10'),
-      );
+      expect(findManyCall.where.priceRub.gte).toEqual(new Prisma.Decimal('10'));
     });
   });
 
@@ -434,12 +562,13 @@ describe('UpgraderService', () => {
       expect(prisma.inventoryItem.updateMany).not.toHaveBeenCalled();
     });
 
-    it('rejects when target price is below the selected chance ideal', async () => {
-      // source 900, chance 50 => ideal 1800. Anything < 1800 is rejected.
+    it('rejects when actual chance is above the configured max (target too cheap)', async () => {
+      // source 900, requested 50%, broad range [50%, 75%].
+      // priceRub 1100 -> received 990 -> chance 900/990*100 = 90.9091% > 75% max.
       (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
         ...targetSkin,
-        priceRub: new Prisma.Decimal('1700.00'),
+        priceRub: new Prisma.Decimal('1100.00'),
       });
 
       await expect(
@@ -451,9 +580,9 @@ describe('UpgraderService', () => {
       ).rejects.toThrow('too low for the selected chance');
     });
 
-    it('rejects when received value exceeds upper tolerance bound', async () => {
-      // source 900, chance 50 => ideal received 1800; default tolerance 15% =>
-      // upper received 2070. priceRub 2400 -> received 2160 > 2070.
+    it('rejects when actual chance is below the requested tier (target too expensive)', async () => {
+      // source 900, requested 50%, broad range [50%, 75%].
+      // priceRub 2400 -> received 2160 -> chance 900/2160*100 = 41.67% < 50%.
       (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(ownedItem);
       (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
         ...targetSkin,
@@ -465,6 +594,44 @@ describe('UpgraderService', () => {
           inventoryItemId: 10,
           targetSkinId: 20,
           chance: 50,
+        }),
+      ).rejects.toThrow('too high for the selected chance');
+    });
+
+    it('accepts a 15% actual target when request chance is 10%', async () => {
+      // source 900, requested 10%, broad range [10%, 75%].
+      // priceRub 6666.67 -> received 6000.00 -> chance 900/6000*100 = 15.0000%.
+      setupForAttempt({
+        rollBasisPoints: 100_000,
+        targetSkin: {
+          ...targetSkin,
+          priceRub: new Prisma.Decimal('6666.67'),
+        },
+      });
+
+      const response: any = await service.createAttempt(123, {
+        inventoryItemId: 10,
+        targetSkinId: 20,
+        chance: 10,
+      });
+
+      expect(response.displayedChancePercent).toBe('15.0000');
+    });
+
+    it('rejects a 9% actual target when request chance is 10%', async () => {
+      // source 900, requested 10%, broad range [10%, 75%].
+      // priceRub 11111.11 -> received 10000.00 -> chance 9.0000% < 10% requested.
+      (prisma.inventoryItem.findUnique as jest.Mock).mockResolvedValue(ownedItem);
+      (prisma.skin.findUnique as jest.Mock).mockResolvedValue({
+        ...targetSkin,
+        priceRub: new Prisma.Decimal('11111.11'),
+      });
+
+      await expect(
+        service.createAttempt(123, {
+          inventoryItemId: 10,
+          targetSkinId: 20,
+          chance: 10,
         }),
       ).rejects.toThrow('too high for the selected chance');
     });
@@ -577,54 +744,78 @@ describe('UpgraderService', () => {
       expect(createCall.data.houseEdgePercent.toString()).toBe('10');
     });
 
-    it('scales effective chance to the actual target value so house edge holds across the tolerance window', async () => {
-      // With the documented default tolerance of 15%, source 900 / chance 50
-      // gives ideal received 1800 and upper received 2070. A target priced
-      // 2200 -> received 1980 sits inside that window. Without the fix,
-      // effective = 50 * 0.9 = 45% and EV = 0.45 * 1980 = 891, leaving only
-      // 1% house edge instead of the configured 10% — a near positive-EV
-      // play. With the fix, fair chance is derived from the actual target:
-      // 900 / 1980 * 100 ≈ 45.4545%, effective ≈ 40.9091%, EV ≈ 810 (~10%
-      // house edge restored).
-      const savedTolerance =
-        process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT;
-      process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT = '15';
-      try {
-        const wideTolerance = new UpgraderService(prisma);
-        setupForAttempt({
-          rollBasisPoints: 100_000,
-          targetSkin: {
-            ...targetSkin,
-            priceRub: new Prisma.Decimal('2200.00'),
-          },
-        });
+    it('stores actual displayedChancePercent and applies house edge to it when target value differs from ideal', async () => {
+      // source 900, requested 50%, broad range [50%, 75%].
+      // priceRub 1800 -> received 1620 -> chance 900/1620*100 = 55.5556%.
+      // effective = 55.5556 * (1 - 0.10) = 50.0000%.
+      // The actual chance is what's stored, not the requested tier 50%.
+      // EV = 0.5 * 1620 = 810 (~10% house edge held across the range).
+      setupForAttempt({
+        rollBasisPoints: 100_000,
+        targetSkin: {
+          ...targetSkin,
+          priceRub: new Prisma.Decimal('1800.00'),
+        },
+      });
 
-        await wideTolerance.createAttempt(123, {
-          inventoryItemId: 10,
-          targetSkinId: 20,
-          chance: 50,
-        });
+      await service.createAttempt(123, {
+        inventoryItemId: 10,
+        targetSkinId: 20,
+        chance: 50,
+      });
 
-        const createCall = (prisma.upgradeAttempt.create as jest.Mock).mock
-          .calls[0][0];
-        const effective = new Prisma.Decimal(
-          createCall.data.effectiveChancePercent,
-        );
-        const targetReceived = new Prisma.Decimal('1980.00');
-        const ev = effective.div(100).mul(targetReceived);
-        // EV must not exceed source value (no positive-EV plays for the user).
-        expect(ev.lte(new Prisma.Decimal('900'))).toBe(true);
-        // Effective chance should be below the naive 45%.
-        expect(effective.lt(new Prisma.Decimal('45'))).toBe(true);
-        // displayedChancePercent is still the user-facing tier they selected.
-        expect(createCall.data.displayedChancePercent.toString()).toBe('50');
-      } finally {
-        if (savedTolerance === undefined) {
-          delete process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT;
-        } else {
-          process.env.UPGRADER_TARGET_PRICE_TOLERANCE_PERCENT = savedTolerance;
-        }
-      }
+      const createCall = (prisma.upgradeAttempt.create as jest.Mock).mock
+        .calls[0][0];
+      const effective = new Prisma.Decimal(
+        createCall.data.effectiveChancePercent,
+      );
+      const targetReceived = new Prisma.Decimal('1620.00');
+      const ev = effective.div(100).mul(targetReceived);
+      // EV must not exceed source value (no positive-EV plays for the user).
+      expect(ev.lte(new Prisma.Decimal('900'))).toBe(true);
+      // Effective chance should be below the actual displayed chance.
+      expect(effective.lt(new Prisma.Decimal('55.5556'))).toBe(true);
+      // displayedChancePercent stores the actual chance, not the requested tier.
+      expect(createCall.data.displayedChancePercent.toString()).toBe(
+        '55.5556',
+      );
+      // The requested tier the user selected is preserved in metadata.
+      expect(createCall.data.metadata.requestedChancePercent).toBe('50.0000');
+    });
+
+    it('returns the actual displayedChancePercent (not the requested tier) in the response when target value differs from ideal', async () => {
+      // priceRub 1800 -> received 1620 -> chance 55.5556%.
+      setupForAttempt({
+        rollBasisPoints: 100_000,
+        targetSkin: {
+          ...targetSkin,
+          priceRub: new Prisma.Decimal('1800.00'),
+        },
+      });
+
+      const response: any = await service.createAttempt(123, {
+        inventoryItemId: 10,
+        targetSkinId: 20,
+        chance: 50,
+      });
+
+      expect(response.displayedChancePercent).toBe('55.5556');
+      expect(response.targetReceivedValueRub).toBe('1620.00');
+    });
+
+    it('stores requestedChancePercent in attempt metadata for audit clarity', async () => {
+      setupForAttempt({ rollBasisPoints: 100_000 });
+
+      await service.createAttempt(123, {
+        inventoryItemId: 10,
+        targetSkinId: 20,
+        chance: 50,
+      });
+
+      const createCall = (prisma.upgradeAttempt.create as jest.Mock).mock
+        .calls[0][0];
+      expect(createCall.data.metadata).toBeDefined();
+      expect(createCall.data.metadata.requestedChancePercent).toBe('50.0000');
     });
 
     it('rejects when claim updateMany returns count 0 (double-spend protection)', async () => {

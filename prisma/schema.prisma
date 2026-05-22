@@ -32,13 +32,14 @@ model User {
 }
 
 model Wallet {
-  id        Int      @id @default(autoincrement())
-  userId    Int      @unique
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  balance   Decimal  @default(0) @db.Decimal(18, 2)
-  currency  String   @default("RUB")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                     Int       @id @default(autoincrement())
+  userId                 Int       @unique
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance                Decimal   @default(0) @db.Decimal(18, 2)
+  currency               String    @default("RUB")
+  freeModeGrantClaimedAt DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 }
 
 model Deposit {
