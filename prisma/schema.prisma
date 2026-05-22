@@ -65,6 +65,7 @@ model Skin {
   weapon          String?
   category        String?
   rarity          String?
+  rarityColor     String?
   exterior        String?
   imageUrl        String?
   priceRub        Decimal         @db.Decimal(18, 2)

@@ -27,6 +27,7 @@ export class InventoryService {
     weapon: true,
     category: true,
     rarity: true,
+    rarityColor: true,
     exterior: true,
     imageUrl: true,
     priceRub: true,

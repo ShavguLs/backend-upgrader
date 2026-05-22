@@ -77,6 +77,7 @@ describe('SkinSyncService', () => {
     expect(upsertCall.update.weapon).toBe('AK-47');
     expect(upsertCall.update.exterior).toBe('Field-Tested');
     expect(upsertCall.update.rarity).toBe('Classified');
+    expect(upsertCall.update.rarityColor).toBe('#d32ce6');
     expect(upsertCall.update.provider).toBe('waxpeer');
     expect(upsertCall.update.isActive).toBe(true);
     expect(upsertCall.create.marketHashName).toBe(

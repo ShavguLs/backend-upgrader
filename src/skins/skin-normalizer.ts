@@ -4,6 +4,7 @@ export interface NormalizedSkin {
   weapon: string | null;
   category: string | null;
   rarity: string | null;
+  rarityColor: string | null;
   exterior: string | null;
 }
 
@@ -22,7 +23,10 @@ const RARITY_BY_COLOR: Record<string, string> = {
   '#8847ff': 'Restricted',
   '#d32ce6': 'Classified',
   '#eb4b4b': 'Covert',
+  '#e4ae39': 'Extraordinary',
 };
+
+const HEX6 = /^[0-9a-f]{6}$/;
 
 export function parseExterior(marketHashName: string): string | null {
   for (const exterior of EXTERIORS) {
@@ -53,13 +57,31 @@ export function parseWeapon(marketHashName: string): string | null {
   return weapon.length > 0 ? weapon : null;
 }
 
-export function mapRarityColor(
+export function normalizeRarityColor(
   color: string | undefined | null,
 ): string | null {
   if (!color) {
     return null;
   }
-  return RARITY_BY_COLOR[color.toLowerCase()] || null;
+  const trimmed = color.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  const hex = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+  if (!HEX6.test(hex)) {
+    return null;
+  }
+  return `#${hex}`;
+}
+
+export function mapRarityColor(
+  color: string | undefined | null,
+): string | null {
+  const normalized = normalizeRarityColor(color);
+  if (!normalized) {
+    return null;
+  }
+  return RARITY_BY_COLOR[normalized] || null;
 }
 
 export function normalizeSkin(input: {
@@ -74,6 +96,7 @@ export function normalizeSkin(input: {
     weapon: parseWeapon(input.marketHashName),
     category: input.category || null,
     rarity: mapRarityColor(input.rarityColor),
+    rarityColor: normalizeRarityColor(input.rarityColor),
     exterior: parseExterior(input.marketHashName),
   };
 }

@@ -21,6 +21,7 @@ export class UpgraderService {
     weapon: true,
     category: true,
     rarity: true,
+    rarityColor: true,
     exterior: true,
     imageUrl: true,
     priceRub: true,

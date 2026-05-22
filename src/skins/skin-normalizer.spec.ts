@@ -1,5 +1,6 @@
 import {
   mapRarityColor,
+  normalizeRarityColor,
   normalizeSkin,
   parseExterior,
   parseWeapon,
@@ -52,11 +53,32 @@ describe('skin-normalizer', () => {
     });
   });
 
+  describe('normalizeRarityColor', () => {
+    it('canonicalizes valid hex values', () => {
+      expect(normalizeRarityColor('#D32CE6')).toBe('#d32ce6');
+      expect(normalizeRarityColor('d32ce6')).toBe('#d32ce6');
+      expect(normalizeRarityColor('  #EB4B4B  ')).toBe('#eb4b4b');
+    });
+
+    it('returns null for invalid values', () => {
+      expect(normalizeRarityColor('#fff')).toBeNull();
+      expect(normalizeRarityColor('blue')).toBeNull();
+      expect(normalizeRarityColor('')).toBeNull();
+      expect(normalizeRarityColor(undefined)).toBeNull();
+      expect(normalizeRarityColor(null)).toBeNull();
+      expect(normalizeRarityColor('#zzzzzz')).toBeNull();
+    });
+  });
+
   describe('mapRarityColor', () => {
     it('maps known colors', () => {
       expect(mapRarityColor('#d32ce6')).toBe('Classified');
       expect(mapRarityColor('#eb4b4b')).toBe('Covert');
       expect(mapRarityColor('#4b69ff')).toBe('Mil-Spec Grade');
+    });
+
+    it('accepts uppercase and missing hash', () => {
+      expect(mapRarityColor('D32CE6')).toBe('Classified');
     });
 
     it('returns null for unknown or missing color', () => {
@@ -71,7 +93,7 @@ describe('skin-normalizer', () => {
       const result = normalizeSkin({
         marketHashName: 'AK-47 | Redline (Field-Tested)',
         category: 'Rifles',
-        rarityColor: '#d32ce6',
+        rarityColor: '#D32CE6',
       });
 
       expect(result).toEqual({
@@ -80,8 +102,20 @@ describe('skin-normalizer', () => {
         weapon: 'AK-47',
         category: 'Rifles',
         rarity: 'Classified',
+        rarityColor: '#d32ce6',
         exterior: 'Field-Tested',
       });
+    });
+
+    it('leaves rarity and rarityColor null when input color is invalid', () => {
+      const result = normalizeSkin({
+        marketHashName: 'AK-47 | Redline (Field-Tested)',
+        category: 'Rifles',
+        rarityColor: 'not-a-color',
+      });
+
+      expect(result.rarity).toBeNull();
+      expect(result.rarityColor).toBeNull();
     });
   });
 });

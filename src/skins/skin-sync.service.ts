@@ -147,6 +147,7 @@ export class SkinSyncService
           weapon: normalized.weapon,
           category: normalized.category,
           rarity: normalized.rarity,
+          rarityColor: normalized.rarityColor,
           exterior: normalized.exterior,
           imageUrl: item.imageUrl,
           priceRub,
