@@ -98,6 +98,7 @@ describe('UpgraderService', () => {
               create: jest.fn(),
               update: jest.fn(),
               findUnique: jest.fn(),
+              findFirst: jest.fn(),
               findMany: jest.fn(),
               count: jest.fn(),
             },
@@ -1155,6 +1156,193 @@ describe('UpgraderService', () => {
       const result = await service.listDrops({});
 
       expect(result.items.map((item) => item.id)).toEqual([1]);
+    });
+  });
+
+  describe('listTopDrop', () => {
+    const publicSkin = {
+      id: 20,
+      marketHashName: 'AWP | Asiimov (Field-Tested)',
+      name: 'AWP | Asiimov',
+      weapon: 'AWP',
+      category: 'Sniper Rifle',
+      rarity: 'Covert',
+      exterior: 'Field-Tested',
+      imageUrl: null,
+      priceRub: new Prisma.Decimal('2000.00'),
+      provider: 'waxpeer',
+      providerItemId: 'awp-asiimov-ft',
+      lastSyncedAt: null,
+      isActive: true,
+      createdAt: new Date('2026-05-01T00:00:00Z'),
+      updatedAt: new Date('2026-05-17T09:00:00Z'),
+    };
+
+    const topAttempt = {
+      id: 99,
+      createdAt: new Date('2026-05-17T10:00:00Z'),
+      targetPriceRub: new Prisma.Decimal('1800.00'),
+      wonInventoryItem: {
+        id: 500,
+        status: 'sold',
+        skin: publicSkin,
+      },
+    };
+
+    it('queries only the authenticated user, winning attempts with a non-null wonInventoryItemId, ordered by value/createdAt/id desc', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue(
+        topAttempt,
+      );
+
+      await service.listTopDrop(123);
+
+      const call = (prisma.upgradeAttempt.findFirst as jest.Mock).mock
+        .calls[0][0];
+      expect(call.where).toEqual({
+        userId: 123,
+        result: 'win',
+        wonInventoryItemId: { not: null },
+      });
+      expect(call.where).not.toHaveProperty('wonInventoryItem');
+      expect(call.orderBy).toEqual([
+        { targetPriceRub: 'desc' },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ]);
+    });
+
+    it('does not filter by won inventory item status (historical achievement)', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue(
+        topAttempt,
+      );
+
+      await service.listTopDrop(123);
+
+      const call = (prisma.upgradeAttempt.findFirst as jest.Mock).mock
+        .calls[0][0];
+      const wonItemSelect = call.select.wonInventoryItem;
+      expect(wonItemSelect).toEqual({
+        select: {
+          id: true,
+          status: true,
+          skin: { select: expect.any(Object) },
+        },
+      });
+      // No status / where filter on the nested relation.
+      expect(wonItemSelect).not.toHaveProperty('where');
+    });
+
+    it('selects only the safe attempt fields and the public won-item shape', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue(
+        topAttempt,
+      );
+
+      await service.listTopDrop(123);
+
+      const select = (prisma.upgradeAttempt.findFirst as jest.Mock).mock
+        .calls[0][0].select;
+      expect(select).toEqual({
+        id: true,
+        createdAt: true,
+        targetPriceRub: true,
+        wonInventoryItem: {
+          select: {
+            id: true,
+            status: true,
+            skin: { select: expect.any(Object) },
+          },
+        },
+      });
+      expect(select).not.toHaveProperty('userId');
+      expect(select).not.toHaveProperty('user');
+      expect(select).not.toHaveProperty('sourceInventoryItemId');
+      expect(select).not.toHaveProperty('sourceInventoryItem');
+      expect(select).not.toHaveProperty('targetSkinId');
+      expect(select).not.toHaveProperty('wonInventoryItemId');
+      expect(select).not.toHaveProperty('effectiveChancePercent');
+      expect(select).not.toHaveProperty('houseEdgePercent');
+      expect(select).not.toHaveProperty('rollPercent');
+      expect(select).not.toHaveProperty('metadata');
+      expect(select).not.toHaveProperty('displayedChancePercent');
+      expect(select).not.toHaveProperty('sourceValueRub');
+      expect(select).not.toHaveProperty('result');
+
+      const wonItemSelect = select.wonInventoryItem.select;
+      expect(wonItemSelect).not.toHaveProperty('userId');
+      expect(wonItemSelect).not.toHaveProperty('purchasePriceRub');
+      expect(wonItemSelect).not.toHaveProperty('sellPriceRub');
+      expect(wonItemSelect).not.toHaveProperty('metadata');
+      expect(wonItemSelect).not.toHaveProperty('source');
+    });
+
+    it('maps targetPriceRub to priceRub with two decimals and returns the won item with skin', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue({
+        ...topAttempt,
+        targetPriceRub: new Prisma.Decimal('2500.5'),
+      });
+
+      const result = await service.listTopDrop(123);
+
+      expect(result.topDrop).toEqual({
+        id: 99,
+        createdAt: new Date('2026-05-17T10:00:00Z'),
+        priceRub: '2500.50',
+        wonItem: {
+          id: 500,
+          status: 'sold',
+          skin: publicSkin,
+        },
+      });
+      expect(result.topDrop).not.toHaveProperty('userId');
+      expect(result.topDrop).not.toHaveProperty('effectiveChancePercent');
+      expect(result.topDrop).not.toHaveProperty('houseEdgePercent');
+      expect(result.topDrop).not.toHaveProperty('rollPercent');
+      expect(result.topDrop).not.toHaveProperty('metadata');
+      expect(result.topDrop).not.toHaveProperty('targetSkinId');
+      expect(result.topDrop).not.toHaveProperty('wonInventoryItemId');
+    });
+
+    it('keeps eligibility for sold and withdrawal-related won item statuses', async () => {
+      for (const status of ['sold', 'withdraw_pending', 'withdrawn']) {
+        (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValueOnce({
+          ...topAttempt,
+          wonInventoryItem: { ...topAttempt.wonInventoryItem, status },
+        });
+
+        const result = await service.listTopDrop(123);
+        expect(result.topDrop?.wonItem.status).toBe(status);
+        expect(result.topDrop?.id).toBe(99);
+      }
+    });
+
+    it('returns { topDrop: null } when no attempt is found', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.listTopDrop(123);
+
+      expect(result).toEqual({ topDrop: null });
+    });
+
+    it('returns { topDrop: null } defensively when the won item is missing', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue({
+        ...topAttempt,
+        wonInventoryItem: null,
+      });
+
+      const result = await service.listTopDrop(123);
+
+      expect(result).toEqual({ topDrop: null });
+    });
+
+    it('returns { topDrop: null } defensively when the joined skin is missing', async () => {
+      (prisma.upgradeAttempt.findFirst as jest.Mock).mockResolvedValue({
+        ...topAttempt,
+        wonInventoryItem: { ...topAttempt.wonInventoryItem, skin: null },
+      });
+
+      const result = await service.listTopDrop(123);
+
+      expect(result).toEqual({ topDrop: null });
     });
   });
 });

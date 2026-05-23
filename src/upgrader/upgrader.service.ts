@@ -446,6 +446,46 @@ export class UpgraderService {
     };
   }
 
+  async listTopDrop(userId: number) {
+    const attempt = await this.prisma.upgradeAttempt.findFirst({
+      where: {
+        userId,
+        result: 'win',
+        wonInventoryItemId: { not: null },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        targetPriceRub: true,
+        wonInventoryItem: {
+          select: {
+            id: true,
+            status: true,
+            skin: { select: this.publicSkinSelect },
+          },
+        },
+      },
+      orderBy: [
+        { targetPriceRub: 'desc' },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
+    });
+
+    if (!attempt?.wonInventoryItem?.skin) {
+      return { topDrop: null };
+    }
+
+    return {
+      topDrop: {
+        id: attempt.id,
+        createdAt: attempt.createdAt,
+        priceRub: attempt.targetPriceRub.toFixed(2),
+        wonItem: attempt.wonInventoryItem,
+      },
+    };
+  }
+
   async listDrops(query: ListUpgradeDropsDto) {
     const limit = query.limit ?? 16;
 

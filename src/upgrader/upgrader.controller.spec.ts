@@ -20,6 +20,7 @@ describe('UpgraderController', () => {
             createAttempt: jest.fn(),
             listHistory: jest.fn(),
             listDrops: jest.fn(),
+            listTopDrop: jest.fn(),
           },
         },
       ],
@@ -97,5 +98,31 @@ describe('UpgraderController', () => {
 
     await expect(controller.listDrops({})).resolves.toEqual(response);
     expect(service.listDrops).toHaveBeenCalledWith({});
+  });
+
+  it('uses authenticated user id for listTopDrop and delegates to service', async () => {
+    const req = { user: { id: 123 } } as unknown as Request;
+    const response = {
+      topDrop: {
+        id: 99,
+        createdAt: '2026-05-17T10:00:00Z',
+        priceRub: '1800.00',
+        wonItem: { id: 500, status: 'sold', skin: { id: 20 } },
+      },
+    };
+    (service.listTopDrop as jest.Mock).mockResolvedValue(response);
+
+    await expect(controller.listTopDrop(req)).resolves.toEqual(response);
+    expect(service.listTopDrop).toHaveBeenCalledWith(123);
+  });
+
+  it('listTopDrop returns null when service reports no winning attempts', async () => {
+    const req = { user: { id: 123 } } as unknown as Request;
+    (service.listTopDrop as jest.Mock).mockResolvedValue({ topDrop: null });
+
+    await expect(controller.listTopDrop(req)).resolves.toEqual({
+      topDrop: null,
+    });
+    expect(service.listTopDrop).toHaveBeenCalledWith(123);
   });
 });

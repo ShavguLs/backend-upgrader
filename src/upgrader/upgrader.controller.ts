@@ -44,4 +44,11 @@ export class UpgraderController {
     const user = req.user as { id: number };
     return this.upgraderService.listHistory(user.id, query);
   }
+
+  @Get('top-drop')
+  @UseGuards(AuthenticatedGuard)
+  listTopDrop(@Req() req: Request) {
+    const user = req.user as { id: number };
+    return this.upgraderService.listTopDrop(user.id);
+  }
 }

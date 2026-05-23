@@ -395,3 +395,86 @@ Only attempts where `userId` equals the authenticated user are returned.
 | --- | --- |
 | `400` | Invalid query (e.g. `page` or `limit` out of range). |
 | `401` | Not authenticated. |
+
+## `GET /upgrader/top-drop`
+
+Returns the single highest-value winning upgrade attempt for the
+authenticated user. Top drop is a historical achievement: the won item
+remains eligible even if it was later sold, withdrawn, or transitioned to
+any other status.
+
+### Auth
+
+Required.
+
+### Query
+
+None.
+
+### Response
+
+```json
+{
+  "topDrop": {
+    "id": 99,
+    "createdAt": "2026-05-17T10:00:00.000Z",
+    "priceRub": "1800.00",
+    "wonItem": {
+      "id": 500,
+      "status": "sold",
+      "skin": {
+        "id": 20,
+        "marketHashName": "AWP | Asiimov (Field-Tested)",
+        "name": "AWP | Asiimov",
+        "weapon": "AWP",
+        "category": "Sniper Rifle",
+        "rarity": "Covert",
+        "exterior": "Field-Tested",
+        "imageUrl": null,
+        "priceRub": "2000.00",
+        "provider": "waxpeer",
+        "providerItemId": "awp-asiimov-ft",
+        "lastSyncedAt": null,
+        "isActive": true,
+        "createdAt": "2026-05-01T00:00:00.000Z",
+        "updatedAt": "2026-05-17T09:00:00.000Z"
+      }
+    }
+  }
+}
+```
+
+When the user has no qualifying winning attempt:
+
+```json
+{
+  "topDrop": null
+}
+```
+
+`topDrop.id` is the `UpgradeAttempt.id`. `topDrop.priceRub` is the
+recorded `UpgradeAttempt.targetPriceRub` at win time, formatted to two
+decimal places — current `Skin.priceRub` is intentionally not used so
+later catalog price changes cannot alter historical ranking.
+`topDrop.wonItem.status` reflects the current inventory status of the won
+item (e.g. `owned`, `sold`, `withdraw_pending`, `withdrawn`).
+
+Ranking is by `targetPriceRub` descending, with `createdAt` descending
+then `id` descending as deterministic tie-breakers.
+
+### Hidden Fields
+
+The following audit fields are intentionally excluded:
+
+- `effectiveChancePercent`
+- `houseEdgePercent`
+- `rollPercent`
+- Raw `metadata`
+- `userId`, source item, and target skin id (the won item's skin already
+  carries the public skin fields)
+
+### Errors
+
+| Status | Reason |
+| --- | --- |
+| `401` | Not authenticated. |
