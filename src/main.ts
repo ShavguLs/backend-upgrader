@@ -34,7 +34,13 @@ async function bootstrap() {
   app.use(
     session({
       store: new PgSessionStore({
-        conString: process.env.DATABASE_URL,
+        conObject: {
+          connectionString: process.env.DATABASE_URL,
+          ssl:
+            process.env.NODE_ENV === 'production'
+              ? { rejectUnauthorized: false }
+              : undefined,
+        },
         createTableIfMissing: true,
       }),
       secret: sessionSecret,
